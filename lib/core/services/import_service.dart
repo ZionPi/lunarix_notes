@@ -1,11 +1,11 @@
 // lib/core/services/import_service.dart
 import 'dart:convert'; // 用于 jsonDecode
-import 'dart:io';     // 用于 File 操作
+import 'dart:io'; // 用于 File 操作
 import 'package:file_picker/file_picker.dart'; // 文件选择器
-import 'package:intl/intl.dart';             // 用于日期格式化和解析
+import 'package:intl/intl.dart'; // 用于日期格式化和解析
 
-import '../models/note.dart';                // Note 模型
-import '../database/database_helper.dart';   // 数据库帮助类
+import '../models/note.dart'; // Note 模型
+import '../database/database_helper.dart'; // 数据库帮助类
 
 // 定义导入结果的数据结构
 class ImportResult {
@@ -17,6 +17,16 @@ class ImportResult {
     required this.importedCount,
     required this.failedCount,
     this.errorMessages = const [],
+  });
+}
+
+class DatabaseImportResult {
+  final bool success;
+  final String message;
+
+  const DatabaseImportResult({
+    required this.success,
+    required this.message,
   });
 }
 
@@ -44,12 +54,15 @@ class ImportService {
         List<dynamic> jsonList;
         try {
           jsonList = jsonDecode(jsonString) as List<dynamic>;
-          print("ImportService: JSON parsed successfully. Found ${jsonList.length} items.");
+          print(
+              "ImportService: JSON parsed successfully. Found ${jsonList.length} items.");
         } catch (e) {
           print("ImportService: Error decoding JSON string: $e");
-          return ImportResult(importedCount: 0, failedCount: 0, errorMessages: ['JSON文件格式无效或无法解析。']);
+          return ImportResult(
+              importedCount: 0,
+              failedCount: 0,
+              errorMessages: ['JSON文件格式无效或无法解析。']);
         }
-
 
         int importedCount = 0;
         int failedCount = 0;
@@ -93,7 +106,8 @@ class ImportService {
                   DateFormat inputFormat = DateFormat("yyyy/MM/dd HH:mm:ss");
                   modificationTime = inputFormat.parse(modTimeString);
                 } catch (e) {
-                  print("ImportService: Failed to parse modification_time '$modTimeString'. Using current time. Error: $e");
+                  print(
+                      "ImportService: Failed to parse modification_time '$modTimeString'. Using current time. Error: $e");
                   modificationTime = DateTime.now(); // 解析失败则使用当前时间
                   errors.add("笔记 '$title': 日期格式错误 '$modTimeString', 已使用当前时间。");
                 }
@@ -114,10 +128,11 @@ class ImportService {
               await _dbHelper.createNote(note);
               importedCount++;
               print("ImportService: Successfully imported note: ${note.title}");
-
-            } catch (e, s) { // 捕获异常和堆栈跟踪
+            } catch (e, s) {
+              // 捕获异常和堆栈跟踪
               failedCount++;
-              String errorMsg = "导入笔记 '${item['title'] ?? '未知标题'}' 失败: ${e.toString()}";
+              String errorMsg =
+                  "导入笔记 '${item['title'] ?? '未知标题'}' 失败: ${e.toString()}";
               print("ImportService: $errorMsg\nStackTrace: $s");
               errors.add(errorMsg);
             }
@@ -128,20 +143,68 @@ class ImportService {
             errors.add(errorMsg);
           }
         }
-        print("ImportService: Import process completed. Imported: $importedCount, Failed: $failedCount");
+        print(
+            "ImportService: Import process completed. Imported: $importedCount, Failed: $failedCount");
         return ImportResult(
           importedCount: importedCount,
           failedCount: failedCount,
           errorMessages: errors,
         );
-      } catch (e, s) { // 捕获文件读取或初始JSON解析的异常
-        print("ImportService: Error processing or reading file: ${e.toString()}\nStackTrace: $s");
-        return ImportResult(importedCount: 0, failedCount: 0, errorMessages: ['读取或处理文件时出错: ${e.toString()}']);
+      } catch (e, s) {
+        // 捕获文件读取或初始JSON解析的异常
+        print(
+            "ImportService: Error processing or reading file: ${e.toString()}\nStackTrace: $s");
+        return ImportResult(
+            importedCount: 0,
+            failedCount: 0,
+            errorMessages: ['读取或处理文件时出错: ${e.toString()}']);
       }
     } else {
       // 用户取消了文件选择器
       print("ImportService: User cancelled file picking.");
       return null; // 返回 null 表示用户取消
+    }
+  }
+
+  Future<DatabaseImportResult?> pickAndImportDatabaseBackup() async {
+    final pickerResult = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      dialogTitle: '请选择要导入的数据库备份文件',
+    );
+
+    if (pickerResult == null || pickerResult.files.single.path == null) {
+      return null;
+    }
+
+    final filePath = pickerResult.files.single.path!;
+    final file = File(filePath);
+    final fileName = pickerResult.files.single.name.toLowerCase();
+
+    if (!fileName.endsWith('.db')) {
+      return const DatabaseImportResult(
+        success: false,
+        message: '请选择 .db 数据库备份文件。',
+      );
+    }
+
+    if (!await file.exists()) {
+      return const DatabaseImportResult(
+        success: false,
+        message: '所选数据库文件不存在。',
+      );
+    }
+
+    try {
+      await _dbHelper.replaceDatabaseFromFile(filePath);
+      return const DatabaseImportResult(
+        success: true,
+        message: '数据库已成功导入。',
+      );
+    } catch (e) {
+      return DatabaseImportResult(
+        success: false,
+        message: '导入数据库失败: $e',
+      );
     }
   }
 }

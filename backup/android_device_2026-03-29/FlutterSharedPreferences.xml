@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <string name="flutter.lastSortOrder">created_at DESC</string>
+    <boolean name="flutter.showImportButton" value="true" />
+    <string name="flutter.noteContentFontSize">VGhpcyBpcyB0aGUgcHJlZml4IGZvciBEb3VibGUu20.0</string>
+    <string name="flutter.selectedThemePreset">preset1</string>
+    <long name="flutter.appBarColor" value="4291166208" />
+    <long name="flutter.cardBackgroundColor" value="4278231163" />
+    <boolean name="flutter.showAppBarTitle" value="true" />
+    <boolean name="flutter.showNoteCardTitle" value="false" />
+</map>

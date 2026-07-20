@@ -1,7 +1,10 @@
 // lib/core/database/database_helper.dart
+import 'dart:io';
+
+import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart'; // flutter pub add path (如果还没添加)
-import '../models/note.dart';     // 导入 Note 模型
+
+import '../models/note.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init(); // 单例模式
@@ -11,14 +14,16 @@ class DatabaseHelper {
 
   Future<Database> get database async {
     if (_database != null) return _database!; // 如果已初始化，直接返回
-    _database = await _initDB('lunarix_notes.db'); // 初始化数据库
+    _database = await _initDB(await databasePath); // 初始化数据库
     return _database!;
   }
 
-  Future<Database> _initDB(String filePath) async {
-    final dbPath = await getDatabasesPath(); // 获取数据库存储路径
-    final path = join(dbPath, filePath);     // 组合路径
+  Future<String> get databasePath async {
+    final dbPath = await getDatabasesPath();
+    return join(dbPath, 'lunarix_notes.db');
+  }
 
+  Future<Database> _initDB(String path) async {
     // 打开数据库，如果数据库不存在，则会调用 onCreate
     // version 用于数据库升级 (迁移)
     return await openDatabase(path, version: 1, onCreate: _createDB);
@@ -94,7 +99,8 @@ CREATE TABLE notes (
   }
 
   // 读取所有笔记 (可带排序)
-  Future<List<Note>> getAllNotes({String currentSortOrder = 'updated_at DESC'}) async {
+  Future<List<Note>> getAllNotes(
+      {String currentSortOrder = 'updated_at DESC'}) async {
     final db = await instance.database;
     final orderBy = 'is_pinned DESC, $currentSortOrder'; // 置顶优先，然后按指定顺序
 
@@ -108,7 +114,8 @@ CREATE TABLE notes (
   }
 
   // 搜索笔记 (标题或内容匹配)
-  Future<List<Note>> searchNotes(String query, {String currentSortOrder = 'updated_at DESC'}) async {
+  Future<List<Note>> searchNotes(String query,
+      {String currentSortOrder = 'updated_at DESC'}) async {
     final db = await instance.database;
     final orderBy = 'is_pinned DESC, $currentSortOrder';
 
@@ -120,7 +127,6 @@ CREATE TABLE notes (
     );
     return result.map((jsonMap) => Note.fromMap(jsonMap)).toList();
   }
-
 
   // 更新笔记
   Future<int> updateNote(Note note) async {
@@ -170,12 +176,56 @@ CREATE TABLE notes (
     return result.map((jsonMap) => Note.fromMap(jsonMap)).toList();
   }
 
-
   // 关闭数据库连接
   Future close() async {
     final db = await instance.database;
-    db.close();
+    await db.close();
     _database = null; // 清除引用，以便下次可以重新初始化
+  }
+
+  Future<void> replaceDatabaseFromFile(String sourcePath) async {
+    final sourceFile = File(sourcePath);
+    if (!await sourceFile.exists()) {
+      throw Exception('备份文件不存在。');
+    }
+
+    final tempDb = await openDatabase(sourcePath, readOnly: true);
+    try {
+      final result = await tempDb.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='notes' LIMIT 1",
+      );
+      if (result.isEmpty) {
+        throw Exception('所选文件不是有效的翼亭笔记数据库。');
+      }
+    } finally {
+      await tempDb.close();
+    }
+
+    final targetPath = await databasePath;
+    final targetFile = File(targetPath);
+    final journalFile = File('$targetPath-journal');
+    final walFile = File('$targetPath-wal');
+    final shmFile = File('$targetPath-shm');
+
+    if (_database != null) {
+      await close();
+    }
+
+    if (await targetFile.exists()) {
+      await targetFile.delete();
+    }
+    if (await journalFile.exists()) {
+      await journalFile.delete();
+    }
+    if (await walFile.exists()) {
+      await walFile.delete();
+    }
+    if (await shmFile.exists()) {
+      await shmFile.delete();
+    }
+
+    await sourceFile.copy(targetPath);
+    _database = await _initDB(targetPath);
   }
 
   // (测试用) 清空所有笔记 - 小心使用！

@@ -1,12 +1,12 @@
-// lib/features/note_list/views/notes_list_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
 import '../../../core/database/database_helper.dart';
 import '../../../core/models/note.dart';
-import '../../note_detail/views/note_detail_screen.dart'; // 确保路径正确
-import '../widgets/note_card.dart';
-import '../../../core/services/import_service.dart';
 import '../../../core/services/settings_service.dart';
-import '../../settings/views/settings_screen.dart'; // <--- 1. 导入 SettingsScreen
+import '../../note_detail/views/note_detail_screen.dart';
+import '../../settings/views/settings_screen.dart';
+import '../widgets/note_card.dart';
 
 class NotesListScreen extends StatefulWidget {
   const NotesListScreen({super.key});
@@ -20,57 +20,63 @@ class _NotesListScreenState extends State<NotesListScreen> {
   bool _isLoading = true;
   String _searchTerm = '';
   String _currentSortOrder = 'updated_at DESC';
+  final TextEditingController _searchController = TextEditingController();
 
   final DatabaseHelper _dbHelper = DatabaseHelper.instance;
-  final ImportService _importService = ImportService();
   final SettingsService _settingsService = SettingsService();
-
-  // --- 2. 添加状态变量用于存储从设置加载的值 ---
-  // bool _showAppBarTitleConfig = true;
-  bool _showImportButtonConfig = true;
-  bool _showNoteCardTitleFromSettings = true; // <--- 1. 新增状态变量
-
 
   @override
   void initState() {
     super.initState();
-    _loadSettingsAndRefreshUI(); // <--- 3. 重命名并修改方法调用
+    _loadSettingsAndRefreshUI();
   }
 
-  // <--- 4. 修改此方法以加载所有相关设置 ---
   Future<void> _loadSettingsAndRefreshUI() async {
     if (!mounted) return;
-    setState(() { _isLoading = true; });
+    setState(() {
+      _isLoading = true;
+    });
 
     _currentSortOrder = await _settingsService.getLastSortOrder();
-    _showImportButtonConfig = await _settingsService.getShowImportButton();
-    _showNoteCardTitleFromSettings = await _settingsService.getShowNoteCardTitle(); // <--- 2. 加载配置
-    // 确保在设置加载后再刷新笔记列表
-    await _refreshNotes();
-    // _refreshNotes 内部会处理 setState(() { _isLoading = false; });
+    await _refreshNotes(showLoading: false);
   }
 
-  Future<void> _refreshNotes() async {
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _refreshNotes({bool showLoading = true}) async {
     if (!mounted) return;
-    if (!_isLoading) { // 如果不是在加载流程中被调用，则主动设为加载状态
-      setState(() { _isLoading = true; });
+    if (showLoading) {
+      setState(() {
+        _isLoading = true;
+      });
     }
 
     try {
-      if (_searchTerm.isEmpty) {
-        _notes = await _dbHelper.getAllNotes(currentSortOrder: _currentSortOrder);
-      } else {
-        _notes = await _dbHelper.searchNotes(_searchTerm, currentSortOrder: _currentSortOrder);
+      final notes = _searchTerm.isEmpty
+          ? await _dbHelper.getAllNotes(currentSortOrder: _currentSortOrder)
+          : await _dbHelper.searchNotes(
+              _searchTerm,
+              currentSortOrder: _currentSortOrder,
+            );
+
+      if (mounted) {
+        setState(() {
+          _notes = notes;
+        });
       }
-
-
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('加载笔记失败: ${e.toString()}')),
         );
+        setState(() {
+          _notes = [];
+        });
       }
-      _notes = [];
     } finally {
       if (mounted) {
         setState(() {
@@ -82,43 +88,54 @@ class _NotesListScreenState extends State<NotesListScreen> {
 
   void _onSearchChanged(String query) {
     if (_searchTerm == query) return;
-    if (!mounted) return;
     setState(() {
       _searchTerm = query;
     });
-    _refreshNotes();
+    _refreshNotes(showLoading: false);
+  }
+
+  void _clearSearch() {
+    if (_searchTerm.isEmpty) return;
+    _searchController.clear();
+    setState(() {
+      _searchTerm = '';
+    });
+    _refreshNotes(showLoading: false);
+  }
+
+  Future<void> _handleCopyNoteContent(Note note) async {
+    final content = note.content.trim();
+    if (content.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('这条笔记没有可复制的正文内容')),
+      );
+      return;
+    }
+
+    await Clipboard.setData(ClipboardData(text: content));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已复制卡片内容')),
+    );
   }
 
   Future<void> _navigateToDetailScreen([Note? note]) async {
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => NoteDetailScreen(
-          note: note,
-        ),
+        builder: (context) => NoteDetailScreen(note: note),
       ),
     );
 
     if (result == true && mounted) {
-      _refreshNotes();
+      await _refreshNotes(showLoading: false);
     }
   }
-
-  // void _onSortOrderChanged(String value) {
-  //   if (_currentSortOrder != value) {
-  //     if (!mounted) return;
-  //     setState(() {
-  //       _currentSortOrder = value;
-  //     });
-  //     _settingsService.setLastSortOrder(value);
-  //     _refreshNotes();
-  //   }
-  // }
 
   Future<void> _handleDeleteNote(int noteId) async {
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (BuildContext context) {
+      builder: (context) {
         return AlertDialog(
           title: const Text('确认删除'),
           content: const Text('您确定要删除这条笔记吗？此操作会将笔记移至回收站。'),
@@ -137,81 +154,121 @@ class _NotesListScreenState extends State<NotesListScreen> {
       },
     );
 
-    if (confirm == true && mounted) {
-      try {
-        await _dbHelper.softDeleteNote(noteId);
-        _refreshNotes();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('笔记已移至回收站')),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('删除失败: $e')),
-          );
-        }
-      }
+    if (confirm != true || !mounted) return;
+
+    final previousNotes = List<Note>.from(_notes);
+    setState(() {
+      _notes = _notes.where((note) => note.id != noteId).toList();
+    });
+
+    try {
+      await _dbHelper.softDeleteNote(noteId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('笔记已移至回收站')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _notes = previousNotes;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('删除失败: $e')),
+      );
     }
   }
 
   Future<void> _handleTogglePin(Note note) async {
-    // ... (置顶逻辑不变) ...
     final newPinStatus = note.isPinned == 1 ? 0 : 1;
-    final updatedNote = note.copyWith(isPinned: newPinStatus, updatedAt: DateTime.now());
+    final updatedNote = note.copyWith(
+      isPinned: newPinStatus,
+      updatedAt: DateTime.now(),
+    );
+
+    final previousNotes = List<Note>.from(_notes);
+    setState(() {
+      _notes = _notes
+          .map((currentNote) =>
+              currentNote.id == note.id ? updatedNote : currentNote)
+          .toList();
+      _notes.sort(_sortNotesForDisplay);
+    });
+
     try {
       await _dbHelper.updateNote(updatedNote);
-      _refreshNotes();
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(newPinStatus == 1 ? '笔记已置顶' : '笔记已取消置顶')));
     } catch (e) {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('操作失败: $e')));
+      if (!mounted) return;
+      setState(() {
+        _notes = previousNotes;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('操作失败: $e')),
+      );
     }
   }
 
   Future<void> _handleToggleStar(Note note) async {
-    // ... (加星逻辑不变) ...
     final newStarStatus = note.isStarred == 1 ? 0 : 1;
-    final updatedNote = note.copyWith(isStarred: newStarStatus, updatedAt: DateTime.now());
+    final updatedNote = note.copyWith(
+      isStarred: newStarStatus,
+      updatedAt: DateTime.now(),
+    );
+
+    final previousNotes = List<Note>.from(_notes);
+    setState(() {
+      _notes = _notes
+          .map((currentNote) =>
+              currentNote.id == note.id ? updatedNote : currentNote)
+          .toList();
+      _notes.sort(_sortNotesForDisplay);
+    });
+
     try {
       await _dbHelper.updateNote(updatedNote);
-      _refreshNotes();
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(newStarStatus == 1 ? '笔记已加星' : '笔记已取消加星')));
     } catch (e) {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('操作失败: $e')));
+      if (!mounted) return;
+      setState(() {
+        _notes = previousNotes;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('操作失败: $e')),
+      );
     }
   }
 
-  void _onNoteCardUpdated(Note possiblyStaleNote) {
-    _refreshNotes();
+  int _sortNotesForDisplay(Note a, Note b) {
+    if (a.isPinned != b.isPinned) {
+      return b.isPinned.compareTo(a.isPinned);
+    }
+
+    switch (_currentSortOrder) {
+      case 'updated_at ASC':
+        return a.updatedAt.compareTo(b.updatedAt);
+      case 'created_at DESC':
+        return b.createdAt.compareTo(a.createdAt);
+      case 'created_at ASC':
+        return a.createdAt.compareTo(b.createdAt);
+      case 'title ASC':
+        return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+      case 'title DESC':
+        return b.title.toLowerCase().compareTo(a.title.toLowerCase());
+      case 'updated_at DESC':
+      default:
+        return b.updatedAt.compareTo(a.updatedAt);
+    }
   }
 
-  Future<void> _handleImportNotes() async {
-    // ... (导入逻辑不变, 但它的显示将受配置控制) ...
-    if (!mounted) return;
-    setState(() { _isLoading = true; });
-    try {
-      final ImportResult? importResult = await _importService.pickAndImportNotes();
-      if (mounted) {
-        if (importResult != null) {
-          // ... (处理导入结果)
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('导入已取消。')));
-        }
-      }
-    } catch (e) { /* ... */ }
-    finally { if(mounted) setState(() { _isLoading = false; });}
+  void _onNoteCardUpdated(Note note) {
+    _refreshNotes(showLoading: false);
   }
 
-  // <--- 5. 添加导航到设置页面的方法 ---
   Future<void> _navigateToSettings() async {
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => const SettingsScreen()),
     );
-    // 从设置页返回后，重新加载所有设置并刷新UI，因为设置可能已更改
     if (mounted) {
-      _loadSettingsAndRefreshUI();
+      await _loadSettingsAndRefreshUI();
     }
   }
 
@@ -219,75 +276,89 @@ class _NotesListScreenState extends State<NotesListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        // --- 1. 设置按钮作为 leading ---
         leading: IconButton(
           icon: const Icon(Icons.settings_outlined),
           tooltip: '设置',
           onPressed: _navigateToSettings,
         ),
         title: const Text('翼亭笔记'),
-        centerTitle: true, // 可以尝试让标题居中，因为 leading 有图标了
-        actions: <Widget>[ // --- 2. 调整 actions 顺序 ---
-          // 导入按钮（如果显示）
-          if (_showImportButtonConfig)
-            IconButton(
-              icon: const Icon(Icons.file_download_outlined),
-              tooltip: '导入笔记',
-              onPressed: _handleImportNotes,
-            ),
-          // 新建笔记按钮放在最右边
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline),
-            tooltip: '新建笔记',
-            onPressed: () => _navigateToDetailScreen(),
-          ),
-          // PopupMenuButton for sorting is REMOVED from here
-        ],
+        centerTitle: true,
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(kToolbarHeight + 8),
+          preferredSize: const Size.fromHeight(64),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16.0, 0, 16.0, 12.0),
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
             child: TextField(
+              controller: _searchController,
               decoration: InputDecoration(
-                hintText: '快速搜索关键字...',
+                hintText: '搜索笔记',
                 prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchTerm.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        tooltip: '清除搜索',
+                        onPressed: _clearSearch,
+                      ),
               ),
               onChanged: _onSearchChanged,
             ),
           ),
         ),
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _notes.isEmpty
-          ? Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Text(
-            _searchTerm.isEmpty
-                ? '还没有笔记。\n点击右上角的 + 新建一篇，或导入已有笔记。'
-                : '未找到与 "$_searchTerm" 匹配的笔记。\n尝试更换搜索词。',
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey[600]),
+        actions: <Widget>[
+          IconButton(
+            icon: const Icon(Icons.add_circle_outline),
+            tooltip: '新建笔记',
+            onPressed: () => _navigateToDetailScreen(),
           ),
-        ),
-      )
-          : ListView.builder(
-        padding: const EdgeInsets.only(top: 8.0, bottom: 16.0),
-        itemCount: _notes.length,
-        itemBuilder: (context, index) {
-          final note = _notes[index];
-          return NoteCard(
-            note: note,
-            onDelete: () => _handleDeleteNote(note.id!),
-            onTogglePin: () => _handleTogglePin(note),
-            onToggleStar: () => _handleToggleStar(note),
-            onNoteUpdated: _onNoteCardUpdated,
-            showTitle: _showNoteCardTitleFromSettings,
-          );
-        },
+        ],
+      ),
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 180),
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _notes.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Container(
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .cardTheme
+                              .color
+                              ?.withValues(alpha: 0.35),
+                          borderRadius: BorderRadius.circular(28),
+                        ),
+                        child: Text(
+                          _searchTerm.isEmpty
+                              ? '还没有笔记。\n点击右上角的 + 新建一篇，或去设置页导入备份。'
+                              : '未找到与 "$_searchTerm" 匹配的笔记。\n试试换一个关键词。',
+                          textAlign: TextAlign.center,
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    color: Colors.grey[700],
+                                    height: 1.5,
+                                  ),
+                        ),
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(4, 8, 4, 16),
+                    itemCount: _notes.length,
+                    itemBuilder: (context, index) {
+                      final note = _notes[index];
+                      return NoteCard(
+                        note: note,
+                        onDelete: () => _handleDeleteNote(note.id!),
+                        onTogglePin: () => _handleTogglePin(note),
+                        onToggleStar: () => _handleToggleStar(note),
+                        onCopyContent: () => _handleCopyNoteContent(note),
+                        onNoteUpdated: _onNoteCardUpdated,
+                      );
+                    },
+                  ),
       ),
     );
   }
 }
-

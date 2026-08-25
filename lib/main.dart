@@ -4,10 +4,10 @@ import 'package:flutter_quill/flutter_quill.dart';
 import 'features/note_list/views/notes_list_screen.dart';
 import 'core/services/settings_service.dart';
 
-const Color _initialAppBarColor = Color(0xFF42519B);
-const Color _initialCardBackgroundColor = Color(0xFFC8E374);
+const Color _initialAppBarColor = Color(0xFF315B66);
+const Color _initialCardBackgroundColor = Color(0xFFFFFFFF);
 
-GlobalKey<_LunarixNotesAppState> lunarixAppKey = GlobalKey();
+GlobalKey<LunarixNotesAppState> lunarixAppKey = GlobalKey();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,10 +18,10 @@ class LunarixNotesApp extends StatefulWidget {
   const LunarixNotesApp({super.key});
 
   @override
-  State<LunarixNotesApp> createState() => _LunarixNotesAppState();
+  State<LunarixNotesApp> createState() => LunarixNotesAppState();
 }
 
-class _LunarixNotesAppState extends State<LunarixNotesApp> {
+class LunarixNotesAppState extends State<LunarixNotesApp> {
   final SettingsService _settingsService = SettingsService();
   ThemeData _currentTheme =
       _buildThemeData(_initialAppBarColor, _initialCardBackgroundColor);
@@ -33,11 +33,8 @@ class _LunarixNotesAppState extends State<LunarixNotesApp> {
   }
 
   Future<void> _loadThemeColors() async {
-    print("Main: Loading theme colors...");
     Color appBarColor = await _settingsService.getAppBarColor();
     Color cardBackgroundColor = await _settingsService.getCardBackgroundColor();
-    print(
-        "Main: Loaded AppBarColor: $appBarColor, CardBackgroundColor: $cardBackgroundColor");
     if (mounted) {
       setState(() {
         _currentTheme = _buildThemeData(appBarColor, cardBackgroundColor);
@@ -73,7 +70,6 @@ class _LunarixNotesAppState extends State<LunarixNotesApp> {
         brightness: overallBrightness, // 确保 ColorScheme 与整体亮度一致
         // --- 明确定义 ColorScheme 中的前景颜色 ---
         // 如果背景是亮的 (我们这里是白色)，那么 onBackground, onSurface 应该是深色
-        onBackground: darkTextColor,
         onSurface: darkTextColor,
         // primary 和 secondary 的 onColor 会由 fromSeed 根据 seedColor 亮度自动生成
         // 但如果appBarColor本身很浅，onPrimary 可能也是深色
@@ -98,16 +94,16 @@ class _LunarixNotesAppState extends State<LunarixNotesApp> {
           color: appBarForegroundColor,
         ),
       ),
-      cardTheme: CardTheme(
+      cardTheme: CardThemeData(
         color: cardBackgroundColor,
-        elevation: 1,
-        shadowColor: Colors.black.withValues(alpha: 0.04),
+        elevation: 0,
+        shadowColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16.0),
-          side: BorderSide(color: Colors.black.withValues(alpha: 0.05)),
+          borderRadius: BorderRadius.circular(8.0),
+          side: BorderSide(color: Colors.black.withValues(alpha: 0.07)),
         ),
-        margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 6.0),
+        margin: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 5.0),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
@@ -182,11 +178,51 @@ class _LunarixNotesAppState extends State<LunarixNotesApp> {
           style: TextButton.styleFrom(
         foregroundColor: appBarColor, // TextButton 文字通常用主题强调色
       )),
-      // 对于浮动操作按钮 (FAB)
-      // floatingActionButtonTheme: FloatingActionButtonThemeData(
-      //   backgroundColor: appBarColor,
-      //   foregroundColor: appBarForegroundColor,
-      // ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: appBarColor,
+          foregroundColor: appBarForegroundColor,
+          minimumSize: const Size(92, 44),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 6,
+        shadowColor: Colors.black.withValues(alpha: 0.12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        titleTextStyle: const TextStyle(
+          color: darkTextColor,
+          fontSize: 18,
+          fontWeight: FontWeight.w800,
+        ),
+        contentTextStyle: TextStyle(
+          color: darkTextColor.withValues(alpha: 0.72),
+          fontSize: 15,
+          height: 1.45,
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: const Color(0xFF2E3038),
+        contentTextStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 15,
+          fontWeight: FontWeight.w500,
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        actionTextColor: const Color(0xFFB9C5FF),
+      ),
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        backgroundColor: appBarColor,
+        foregroundColor: appBarForegroundColor,
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
       // 图标主题
       iconTheme: IconThemeData(
         color: darkTextColor.withValues(alpha: 0.8), // 默认图标颜色
@@ -196,8 +232,6 @@ class _LunarixNotesAppState extends State<LunarixNotesApp> {
 
   @override
   Widget build(BuildContext context) {
-    print(
-        "Main: Building LunarixNotesApp with theme for AppBar: ${_currentTheme.appBarTheme.backgroundColor}, ScaffoldBG: ${_currentTheme.scaffoldBackgroundColor}");
     return MaterialApp(
       title: 'Lunarix Notes (翼亭笔记)',
       theme: _currentTheme,

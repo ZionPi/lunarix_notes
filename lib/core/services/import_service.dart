@@ -2,6 +2,7 @@
 import 'dart:convert'; // 用于 jsonDecode
 import 'dart:io'; // 用于 File 操作
 import 'package:file_picker/file_picker.dart'; // 文件选择器
+import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart'; // 用于日期格式化和解析
 
 import '../models/note.dart'; // Note 模型
@@ -47,17 +48,17 @@ class ImportService {
       try {
         // 2. 读取文件内容
         String jsonString = await file.readAsString();
-        print("ImportService: JSON file content read successfully.");
+        debugPrint("ImportService: JSON file content read successfully.");
 
         // 3. 解析 JSON
         // 假设JSON的顶层是一个列表
         List<dynamic> jsonList;
         try {
           jsonList = jsonDecode(jsonString) as List<dynamic>;
-          print(
+          debugPrint(
               "ImportService: JSON parsed successfully. Found ${jsonList.length} items.");
         } catch (e) {
-          print("ImportService: Error decoding JSON string: $e");
+          debugPrint("ImportService: Error decoding JSON string: $e");
           return ImportResult(
               importedCount: 0,
               failedCount: 0,
@@ -95,9 +96,7 @@ class ImportService {
                 }
               }
 
-              if (content == null) {
-                content = ""; // 内容可以为空
-              }
+              content ??= ""; // 内容可以为空
 
               // 解析 "modification_time"
               if (modTimeString != null && modTimeString.isNotEmpty) {
@@ -106,7 +105,7 @@ class ImportService {
                   DateFormat inputFormat = DateFormat("yyyy/MM/dd HH:mm:ss");
                   modificationTime = inputFormat.parse(modTimeString);
                 } catch (e) {
-                  print(
+                  debugPrint(
                       "ImportService: Failed to parse modification_time '$modTimeString'. Using current time. Error: $e");
                   modificationTime = DateTime.now(); // 解析失败则使用当前时间
                   errors.add("笔记 '$title': 日期格式错误 '$modTimeString', 已使用当前时间。");
@@ -127,23 +126,24 @@ class ImportService {
 
               await _dbHelper.createNote(note);
               importedCount++;
-              print("ImportService: Successfully imported note: ${note.title}");
+              debugPrint(
+                  "ImportService: Successfully imported note: ${note.title}");
             } catch (e, s) {
               // 捕获异常和堆栈跟踪
               failedCount++;
               String errorMsg =
                   "导入笔记 '${item['title'] ?? '未知标题'}' 失败: ${e.toString()}";
-              print("ImportService: $errorMsg\nStackTrace: $s");
+              debugPrint("ImportService: $errorMsg\nStackTrace: $s");
               errors.add(errorMsg);
             }
           } else {
             failedCount++;
             String errorMsg = "JSON中发现无效的笔记条目 (非Map类型): $item";
-            print("ImportService: $errorMsg");
+            debugPrint("ImportService: $errorMsg");
             errors.add(errorMsg);
           }
         }
-        print(
+        debugPrint(
             "ImportService: Import process completed. Imported: $importedCount, Failed: $failedCount");
         return ImportResult(
           importedCount: importedCount,
@@ -152,7 +152,7 @@ class ImportService {
         );
       } catch (e, s) {
         // 捕获文件读取或初始JSON解析的异常
-        print(
+        debugPrint(
             "ImportService: Error processing or reading file: ${e.toString()}\nStackTrace: $s");
         return ImportResult(
             importedCount: 0,
@@ -161,7 +161,7 @@ class ImportService {
       }
     } else {
       // 用户取消了文件选择器
-      print("ImportService: User cancelled file picking.");
+      debugPrint("ImportService: User cancelled file picking.");
       return null; // 返回 null 表示用户取消
     }
   }

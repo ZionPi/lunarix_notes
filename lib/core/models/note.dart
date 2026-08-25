@@ -7,13 +7,14 @@ class Note {
   DateTime createdAt;
   DateTime updatedAt;
   String? sourceFilename; // 导入时的原始文件名 (可选)
-  int? folderId;          // 所属文件夹ID (可选，后续功能)
-  int isArchived;        // 是否已归档 (0 for false, 1 for true)
-  int isDeleted;         // 是否已软删除 (0 for false, 1 for true)
-  DateTime? deletedAt;     // 软删除时间 (可选)
-  String? color;           // 卡片颜色 (可选，后续功能)
-  int isPinned;          // 是否置顶 (0 for false, 1 for true)
-  int isStarred;         // 是否加星 (0 for false, 1 for true)
+  int? folderId; // 所属文件夹ID (可选，后续功能)
+  int isArchived; // 是否已归档 (0 for false, 1 for true)
+  int isDeleted; // 是否已软删除 (0 for false, 1 for true)
+  DateTime? deletedAt; // 软删除时间 (可选)
+  String? color; // 卡片颜色 (可选，后续功能)
+  int isPinned; // 是否置顶 (0 for false, 1 for true)
+  int? pinOrder; // 置顶区内的手动排序位置
+  int isStarred; // 是否加星 (0 for false, 1 for true)
 
   // --- 后续会添加的字段 ---
   //艾宾浩斯相关
@@ -35,7 +36,6 @@ class Note {
   //附件信息 (未来可能是一个独立的 Attachment 类或 List<Attachment>)
   // List<String>? attachmentPaths;
 
-
   Note({
     this.id,
     required this.title,
@@ -45,12 +45,12 @@ class Note {
     this.sourceFilename,
     this.folderId,
     this.isArchived = 0, // 默认值
-    this.isDeleted = 0,  // 默认值
+    this.isDeleted = 0, // 默认值
     this.deletedAt,
     this.color,
-    this.isPinned = 0,   // 默认值
-    this.isStarred = 0,  // 默认值
-
+    this.isPinned = 0, // 默认值
+    this.pinOrder,
+    this.isStarred = 0, // 默认值
     //后续字段的初始化
     // this.ebbinghausLastReviewedAt,
     // this.ebbinghausNextReviewAt,
@@ -80,6 +80,7 @@ class Note {
       'deleted_at': deletedAt?.toIso8601String(), // 可选字段
       'color': color,
       'is_pinned': isPinned,
+      'pin_order': pinOrder,
       'is_starred': isStarred,
       // 后续字段的映射
     };
@@ -95,11 +96,15 @@ class Note {
       updatedAt: DateTime.parse(map['updated_at'] as String),
       sourceFilename: map['source_filename'] as String?,
       folderId: map['folder_id'] as int?,
-      isArchived: map['is_archived'] as int? ?? 0, // 提供默认值以防数据库中为null (虽然表结构定义为NOT NULL)
+      isArchived: map['is_archived'] as int? ??
+          0, // 提供默认值以防数据库中为null (虽然表结构定义为NOT NULL)
       isDeleted: map['is_deleted'] as int? ?? 0,
-      deletedAt: map['deleted_at'] != null ? DateTime.parse(map['deleted_at'] as String) : null,
+      deletedAt: map['deleted_at'] != null
+          ? DateTime.parse(map['deleted_at'] as String)
+          : null,
       color: map['color'] as String?,
       isPinned: map['is_pinned'] as int? ?? 0,
+      pinOrder: map['pin_order'] as int?,
       isStarred: map['is_starred'] as int? ?? 0,
       // 后续字段的映射
     );
@@ -120,6 +125,8 @@ class Note {
     bool clearDeletedAt = false, // 特殊标志用于显式清除
     String? color,
     int? isPinned,
+    int? pinOrder,
+    bool clearPinOrder = false,
     int? isStarred,
   }) {
     return Note(
@@ -135,12 +142,14 @@ class Note {
       deletedAt: clearDeletedAt ? null : (deletedAt ?? this.deletedAt),
       color: color ?? this.color,
       isPinned: isPinned ?? this.isPinned,
+      pinOrder: clearPinOrder ? null : (pinOrder ?? this.pinOrder),
       isStarred: isStarred ?? this.isStarred,
     );
   }
 
   @override
-  String toString() { // 方便调试时打印Note对象
-    return 'Note{id: $id, title: "$title", updatedAt: $updatedAt, isPinned: $isPinned, isStarred: $isStarred}';
+  String toString() {
+    // 方便调试时打印Note对象
+    return 'Note{id: $id, title: "$title", updatedAt: $updatedAt, isPinned: $isPinned, pinOrder: $pinOrder, isStarred: $isStarred}';
   }
 }

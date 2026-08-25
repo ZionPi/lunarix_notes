@@ -13,26 +13,28 @@ class SettingsService {
   static const String _keyCardBackgroundColor = 'cardBackgroundColor';
   static const String _keySelectedThemePreset = 'selectedThemePreset';
 
-
   static const Map<String, Map<String, Color>> themePresets = {
-    'default': { // 你当前的默认颜色
+    'default': {
+      // 你当前的默认颜色
       'appBarColor': Color(0xFF42519B),
       'cardBackgroundColor': Color(0xFFC8E374),
     },
-    'preset1': { // 翼亭红与绿
+    'preset1': {
+      // 翼亭红与绿
       'appBarColor': Color(0xFFC60000),
       'cardBackgroundColor': Color(0xFF00A07B),
     },
-    'preset2': { // 深蓝与青草绿
+    'preset2': {
+      // 深蓝与青草绿
       'appBarColor': Color(0xFF0F1732),
       'cardBackgroundColor': Color(0xFF7CCE51),
     },
-    'preset3': { // 宝石蓝与活力橙
+    'preset3': {
+      // 宝石蓝与活力橙
       'appBarColor': Color(0xFF2F3491),
       'cardBackgroundColor': Color(0xFFFFB343),
     }
   };
-
 
   Future<SharedPreferences> _getPrefs() async {
     return SharedPreferences.getInstance();
@@ -82,33 +84,38 @@ class SettingsService {
     await prefs.setDouble(_keyNoteContentFontSize, value);
   }
 
-  Future<bool> getShowNoteCardTitle() async { // <--- 新增 Getter
+  Future<bool> getShowNoteCardTitle() async {
+    // <--- 新增 Getter
     final prefs = await _getPrefs();
     return prefs.getBool(_keyShowNoteCardTitle) ?? true; // 默认为 true (显示卡片标题)
   }
 
-  Future<void> setShowNoteCardTitle(bool value) async { // <--- 新增 Setter
+  Future<void> setShowNoteCardTitle(bool value) async {
+    // <--- 新增 Setter
     final prefs = await _getPrefs();
     await prefs.setBool(_keyShowNoteCardTitle, value);
   }
 
-
   // --- Selected Theme Preset ---
-  Future<String> getSelectedThemePresetName() async { // <--- 新增
+  Future<String> getSelectedThemePresetName() async {
+    // <--- 新增
     final prefs = await _getPrefs();
-    return prefs.getString(_keySelectedThemePreset) ?? 'default'; // 默认为 'default'
+    return prefs.getString(_keySelectedThemePreset) ??
+        'default'; // 默认为 'default'
   }
 
-  Future<void> setSelectedThemePresetName(String presetName) async { // <--- 新增
+  Future<void> setSelectedThemePresetName(String presetName) async {
+    // <--- 新增
     final prefs = await _getPrefs();
     await prefs.setString(_keySelectedThemePreset, presetName);
     // 当选择预设时，也直接保存该预设对应的颜色值
     if (themePresets.containsKey(presetName)) {
-      await setAppBarColorValue(themePresets[presetName]!['appBarColor']!.value);
-      await setCardBackgroundColorValue(themePresets[presetName]!['cardBackgroundColor']!.value);
+      await setAppBarColorValue(
+          themePresets[presetName]!['appBarColor']!.toARGB32());
+      await setCardBackgroundColorValue(
+          themePresets[presetName]!['cardBackgroundColor']!.toARGB32());
     }
   }
-
 
   // --- AppBar Color ---
   Future<Color> getAppBarColor() async {
@@ -117,12 +124,14 @@ class SettingsService {
     // 如果没有存储颜色值，则从当前选择的预设中获取
     if (colorValue == null) {
       String presetName = await getSelectedThemePresetName();
-      return themePresets[presetName]?['appBarColor'] ?? themePresets['default']!['appBarColor']!;
+      return themePresets[presetName]?['appBarColor'] ??
+          themePresets['default']!['appBarColor']!;
     }
     return Color(colorValue);
   }
 
-  Future<void> setAppBarColorValue(int colorValue) async { // 存储 int 值
+  Future<void> setAppBarColorValue(int colorValue) async {
+    // 存储 int 值
     final prefs = await _getPrefs();
     await prefs.setInt(_keyAppBarColor, colorValue);
   }
@@ -133,12 +142,14 @@ class SettingsService {
     final colorValue = prefs.getInt(_keyCardBackgroundColor);
     if (colorValue == null) {
       String presetName = await getSelectedThemePresetName();
-      return themePresets[presetName]?['cardBackgroundColor'] ?? themePresets['default']!['cardBackgroundColor']!;
+      return themePresets[presetName]?['cardBackgroundColor'] ??
+          themePresets['default']!['cardBackgroundColor']!;
     }
     return Color(colorValue);
   }
 
-  Future<void> setCardBackgroundColorValue(int colorValue) async { // 存储 int 值
+  Future<void> setCardBackgroundColorValue(int colorValue) async {
+    // 存储 int 值
     final prefs = await _getPrefs();
     await prefs.setInt(_keyCardBackgroundColor, colorValue);
   }

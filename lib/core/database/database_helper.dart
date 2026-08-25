@@ -26,7 +26,12 @@ class DatabaseHelper {
   Future<Database> _initDB(String path) async {
     // 打开数据库，如果数据库不存在，则会调用 onCreate
     // version 用于数据库升级 (迁移)
-    return await openDatabase(path, version: 1, onCreate: _createDB);
+    return await openDatabase(
+      path,
+      version: 2,
+      onCreate: _createDB,
+      onUpgrade: _upgradeDB,
+    );
   }
 
   // 当数据库第一次被创建时调用
@@ -51,6 +56,7 @@ CREATE TABLE notes (
   deleted_at $nullableTextType,
   color $nullableTextType,
   is_pinned $integerType DEFAULT 0,
+  pin_order INTEGER,
   is_starred $integerType DEFAULT 0
   -- 后续添加其他字段:
   -- ebbinghaus_last_reviewed_at TEXT,
@@ -69,6 +75,45 @@ CREATE TABLE notes (
     //   created_at $textType
     // )
     // ''');
+  }
+
+  Future _upgradeDB(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('ALTER TABLE notes ADD COLUMN pin_order INTEGER');
+      final pinnedRows = await db.query(
+        'notes',
+        columns: ['id'],
+        where: 'is_pinned = 1 AND is_deleted = 0',
+        orderBy: 'updated_at DESC',
+      );
+      for (var i = 0; i < pinnedRows.length; i++) {
+        await db.update(
+          'notes',
+          {'pin_order': i},
+          where: 'id = ?',
+          whereArgs: [pinnedRows[i]['id']],
+        );
+      }
+    }
+  }
+
+  String _safeSortOrder(String currentSortOrder) {
+    switch (currentSortOrder) {
+      case 'updated_at ASC':
+      case 'created_at DESC':
+      case 'created_at ASC':
+      case 'title ASC':
+      case 'title DESC':
+      case 'updated_at DESC':
+        return currentSortOrder;
+      default:
+        return 'updated_at DESC';
+    }
+  }
+
+  String _notesOrderBy(String currentSortOrder) {
+    final safeSortOrder = _safeSortOrder(currentSortOrder);
+    return 'is_pinned DESC, CASE WHEN pin_order IS NULL THEN 1 ELSE 0 END, pin_order ASC, $safeSortOrder';
   }
 
   // --- CRUD (Create, Read, Update, Delete) 操作 ---
@@ -99,10 +144,11 @@ CREATE TABLE notes (
   }
 
   // 读取所有笔记 (可带排序)
-  Future<List<Note>> getAllNotes(
-      {String currentSortOrder = 'updated_at DESC'}) async {
+  Future<List<Note>> getAllNotes({
+    String currentSortOrder = 'updated_at DESC',
+  }) async {
     final db = await instance.database;
-    final orderBy = 'is_pinned DESC, $currentSortOrder'; // 置顶优先，然后按指定顺序
+    final orderBy = _notesOrderBy(currentSortOrder);
 
     final result = await db.query(
       'notes',
@@ -114,10 +160,12 @@ CREATE TABLE notes (
   }
 
   // 搜索笔记 (标题或内容匹配)
-  Future<List<Note>> searchNotes(String query,
-      {String currentSortOrder = 'updated_at DESC'}) async {
+  Future<List<Note>> searchNotes(
+    String query, {
+    String currentSortOrder = 'updated_at DESC',
+  }) async {
     final db = await instance.database;
-    final orderBy = 'is_pinned DESC, $currentSortOrder';
+    final orderBy = _notesOrderBy(currentSortOrder);
 
     final result = await db.query(
       'notes',
@@ -139,6 +187,26 @@ CREATE TABLE notes (
     );
   }
 
+  Future<int> getNextPinOrder() async {
+    final db = await instance.database;
+    final result = await db.rawQuery(
+      'SELECT MAX(pin_order) AS max_order FROM notes WHERE is_pinned = 1 AND is_deleted = 0',
+    );
+    final maxOrder = result.first['max_order'] as int?;
+    return (maxOrder ?? -1) + 1;
+  }
+
+  Future<void> updatePinnedOrder(List<Note> pinnedNotes) async {
+    final db = await instance.database;
+    final batch = db.batch();
+    for (var i = 0; i < pinnedNotes.length; i++) {
+      final id = pinnedNotes[i].id;
+      if (id == null) continue;
+      batch.update('notes', {'pin_order': i}, where: 'id = ?', whereArgs: [id]);
+    }
+    await batch.commit(noResult: true);
+  }
+
   // 软删除笔记 (标记为已删除)
   Future<int> softDeleteNote(int id) async {
     final db = await instance.database;
@@ -148,7 +216,22 @@ CREATE TABLE notes (
         'is_deleted': 1,
         'deleted_at': DateTime.now().toIso8601String(),
         'is_pinned': 0, // 取消置顶当软删除时
+        'pin_order': null,
         'is_starred': 0, // 取消加星当软删除时 (可选逻辑)
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<int> restoreNote(int id) async {
+    final db = await instance.database;
+    return db.update(
+      'notes',
+      {
+        'is_deleted': 0,
+        'deleted_at': null,
+        'updated_at': DateTime.now().toIso8601String(),
       },
       where: 'id = ?',
       whereArgs: [id],
@@ -158,11 +241,7 @@ CREATE TABLE notes (
   // 永久删除笔记 (如果需要回收站清空功能)
   Future<int> permanentlyDeleteNote(int id) async {
     final db = await instance.database;
-    return db.delete(
-      'notes',
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    return db.delete('notes', where: 'id = ?', whereArgs: [id]);
   }
 
   // (可选) 获取所有已软删除的笔记 (用于回收站)
@@ -234,6 +313,5 @@ CREATE TABLE notes (
     await db.delete('notes');
     // 如果有其他表，也需要在这里删除
     // 例如: await db.delete('folders');
-    print("DANGER: All notes have been deleted from the database.");
   }
 }

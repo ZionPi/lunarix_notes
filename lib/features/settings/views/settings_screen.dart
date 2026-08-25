@@ -71,7 +71,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('导入数据库备份'),
-        content: const Text('这会直接覆盖当前应用内的全部笔记数据，请确认已经做好备份。'),
+        content: const Text(
+          '这会覆盖当前应用内的全部笔记数据。继续前请确认你已经保留了可恢复的备份。',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -140,7 +142,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           DropdownButtonFormField<String>(
-            value: _currentSortOrderValue,
+            initialValue: _currentSortOrderValue,
             isExpanded: true,
             decoration: const InputDecoration(
               contentPadding:
@@ -170,10 +172,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           Column(
             children: SettingsService.themePresets.keys.map((presetName) {
+              // ignore: deprecated_member_use
               return RadioListTile<String>(
                 title: Text(_themePresetDisplayNames[presetName] ?? presetName),
                 value: presetName,
+                // ignore: deprecated_member_use
                 groupValue: _selectedThemePresetName,
+                // ignore: deprecated_member_use
                 onChanged: _onThemePresetChanged,
                 secondary: Row(
                   mainAxisSize: MainAxisSize.min,

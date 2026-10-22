@@ -14,13 +14,17 @@ import '../../../core/database/database_helper.dart';
 import '../../../core/models/note.dart';
 import '../../../core/services/draft_service.dart';
 import '../../../core/services/settings_service.dart';
+import '../widgets/note_image_gallery.dart';
 
 enum NoteDetailMode { viewMarkdown, editRaw }
 
+enum _LeaveAction { save, discard }
+
 class NoteDetailScreen extends StatefulWidget {
   final Note? note;
+  final bool startEditing;
 
-  const NoteDetailScreen({super.key, this.note});
+  const NoteDetailScreen({super.key, this.note, this.startEditing = false});
 
   @override
   State<NoteDetailScreen> createState() => _NoteDetailScreenState();
@@ -49,6 +53,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
   bool _isApplyingHistory = false;
   Timer? _draftTimer;
   Timer? _historyTimer;
+  Future<void>? _pendingDraftSave;
 
   @override
   void initState() {
@@ -58,12 +63,13 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
 
   Future<void> _bootstrap() async {
     final contentFontSize = await _settingsService.getNoteContentFontSize();
+    if (!mounted) return;
     final now = DateTime.now();
 
     if (widget.note == null) {
       final defaultTitle = DateFormat('yyyy-MM-dd HH:mm:ss').format(now);
       _isNewNote = true;
-      _newNoteDefaultTitleActive = true;
+      _newNoteDefaultTitleActive = false;
       _newNoteDefaultTitle = defaultTitle;
       _currentNote = Note(
         title: defaultTitle,
@@ -72,7 +78,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
         updatedAt: now,
       );
       _currentMode = NoteDetailMode.editRaw;
-      _titleController = TextEditingController(text: defaultTitle);
+      _titleController = TextEditingController();
       _contentController = TextEditingController();
       await _restoreDraftIfNeeded(null);
     } else {
@@ -83,7 +89,9 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
         text: _displayTitleForEditing(_currentNote.title),
       );
       _contentController = TextEditingController(text: parsed.text);
-      _currentMode = NoteDetailMode.viewMarkdown;
+      _currentMode = widget.startEditing
+          ? NoteDetailMode.editRaw
+          : NoteDetailMode.viewMarkdown;
       await _restoreDraftIfNeeded(_currentNote.id);
     }
 
@@ -103,8 +111,10 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
   void dispose() {
     _draftTimer?.cancel();
     _historyTimer?.cancel();
-    _titleController.dispose();
-    _contentController.dispose();
+    if (_isInitialized) {
+      _titleController.dispose();
+      _contentController.dispose();
+    }
     super.dispose();
   }
 
@@ -124,7 +134,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
   }
 
   void _notifyDraftChanged() {
-    if (_isApplyingHistory) return;
+    if (_isApplyingHistory || _isSaving) return;
     if (_newNoteDefaultTitleActive &&
         _titleController.text != _newNoteDefaultTitle) {
       _newNoteDefaultTitleActive = false;
@@ -154,7 +164,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     if (!_isInitialized) return;
     _draftTimer?.cancel();
     _draftTimer = Timer(const Duration(milliseconds: 450), () {
-      _draftService.saveDraft(
+      _pendingDraftSave = _draftService.saveDraft(
         noteId: _isNewNote ? null : _currentNote.id,
         title: _titleController.text.trim(),
         content: _composeContentForSaving(),
@@ -259,6 +269,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
 
   Future<void> _saveNote() async {
     if (_isSaving) return;
+    _draftTimer?.cancel();
 
     final content = _composeContentForSaving();
     final now = DateTime.now();
@@ -268,11 +279,6 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('请输入笔记内容后保存。')));
-      return;
-    }
-
-    if (title.isEmpty && content.isEmpty) {
-      Navigator.pop(context, false);
       return;
     }
 
@@ -287,6 +293,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     );
 
     try {
+      await _pendingDraftSave;
       if (_isNewNote) {
         _currentNote = await _dbHelper.createNote(noteToSave);
         await _draftService.clearDraft(null);
@@ -342,32 +349,54 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
         _draftContent != _currentNote.content.trimRight();
   }
 
-  Future<bool> _confirmDiscardChanges() async {
+  Future<bool> _confirmLeaveEditor() async {
     if (!_hasUnsavedChanges) return true;
-    final result = await showDialog<bool>(
+    FocusManager.instance.primaryFocus?.unfocus();
+    final result = await showModalBottomSheet<_LeaveAction>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('放弃这次修改？'),
-        content: const Text(
-          '当前内容还没有保存。放弃后，本次编辑和对应草稿都会被清除。',
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(_isNewNote ? '保存这篇笔记？' : '保存修改？',
+                    style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 8),
+                Text(_isNewNote ? '这篇笔记还没有保存。' : '放弃将恢复上次保存的内容。',
+                    style: Theme.of(context).textTheme.bodySmall),
+                const SizedBox(height: 20),
+                Row(children: [
+                  Expanded(
+                      child: OutlinedButton(
+                    onPressed: () =>
+                        Navigator.pop(sheetContext, _LeaveAction.discard),
+                    child: Text(_isNewNote ? '不保存' : '放弃修改'),
+                  )),
+                  const SizedBox(width: 12),
+                  Expanded(
+                      child: FilledButton(
+                    onPressed: () =>
+                        Navigator.pop(sheetContext, _LeaveAction.save),
+                    child: Text(_isNewNote ? '保存笔记' : '保存退出'),
+                  )),
+                ]),
+              ]),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('继续编辑'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.deepOrange),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('放弃'),
-          ),
-        ],
       ),
     );
-    if (result == true) {
-      await _draftService.clearDraft(_isNewNote ? null : _currentNote.id);
+    if (result == null || !mounted) return false;
+    if (result == _LeaveAction.save) {
+      await _saveNote();
+      return mounted && !_isSaving && !_hasUnsavedChanges;
     }
-    return result == true;
+    _draftTimer?.cancel();
+    await _pendingDraftSave;
+    await _draftService.clearDraft(_isNewNote ? null : _currentNote.id);
+    return true;
   }
 
   Future<void> _handleBack() async {
@@ -378,7 +407,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
 
   Future<bool> _shouldLeavePage() async {
     if (_currentMode == NoteDetailMode.editRaw && _hasUnsavedChanges) {
-      return await _confirmDiscardChanges();
+      return await _confirmLeaveEditor();
     }
     return true;
   }
@@ -542,11 +571,6 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     _replaceSelection(text);
   }
 
-  void _clearContent() {
-    if (_contentController.text.isEmpty) return;
-    _contentController.clear();
-  }
-
   Future<void> _openMarkdownLink(String? href) async {
     if (href == null || href.isEmpty) return;
     final uri = Uri.tryParse(href);
@@ -586,16 +610,13 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
   }
 
   Widget _buildEditorToolbar(ThemeData theme) {
-    final chipColor = theme.colorScheme.primary.withValues(alpha: 0.07);
+    const chipColor = Colors.white;
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
       decoration: BoxDecoration(
         color: chipColor,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: theme.colorScheme.primary.withValues(alpha: 0.10),
-        ),
+        border: Border(top: BorderSide(color: theme.dividerColor)),
       ),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
@@ -642,145 +663,12 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     );
   }
 
-  Widget _buildInsertedImagesSection(ThemeData theme) {
-    if (_insertedImages.isEmpty) return const SizedBox.shrink();
-
-    return Container(
-      margin: const EdgeInsets.only(top: 12),
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.primary.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: theme.colorScheme.primary.withValues(alpha: 0.08),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                '图片',
-                style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                '${_insertedImages.length} 张',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: theme.colorScheme.primary,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            height: 164,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: _insertedImages.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 12),
-              itemBuilder: (context, index) {
-                final image = _insertedImages[index];
-                final uri = Uri.parse(image.uri);
-                final isLocal = uri.scheme == 'file';
-                return Container(
-                  width: 148,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.92),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.08),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: isLocal
-                              ? Image.file(
-                                  File(uri.toFilePath()),
-                                  width: double.infinity,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) =>
-                                      _buildBrokenImage(),
-                                )
-                              : Image.network(
-                                  uri.toString(),
-                                  width: double.infinity,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) =>
-                                      _buildBrokenImage(),
-                                ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        image.alt,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          IconButton(
-                            onPressed: index == 0
-                                ? null
-                                : () => _moveInsertedImage(index, index - 1),
-                            icon: const Icon(
-                              Icons.arrow_back_ios_new_rounded,
-                              size: 16,
-                            ),
-                            visualDensity: VisualDensity.compact,
-                            tooltip: '左移',
-                          ),
-                          IconButton(
-                            onPressed: index == _insertedImages.length - 1
-                                ? null
-                                : () => _moveInsertedImage(index, index + 1),
-                            icon: const Icon(
-                              Icons.arrow_forward_ios_rounded,
-                              size: 16,
-                            ),
-                            visualDensity: VisualDensity.compact,
-                            tooltip: '右移',
-                          ),
-                          const Spacer(),
-                          IconButton(
-                            onPressed: () => _removeInsertedImage(index),
-                            icon: const Icon(Icons.close_rounded, size: 18),
-                            visualDensity: VisualDensity.compact,
-                            tooltip: '移除',
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBrokenImage() {
-    return Container(
-      color: Colors.black12,
-      alignment: Alignment.center,
-      child: const Icon(Icons.broken_image_outlined),
-    );
-  }
+  Widget _buildInsertedImagesSection(ThemeData theme) => NoteImageGallery(
+        uris: _insertedImages.map((image) => image.uri).toList(),
+        onRemove: _removeInsertedImage,
+        onReorder: _moveInsertedImage,
+        onAdd: _insertImage,
+      );
 
   Widget _buildPreviewBody(ThemeData theme) {
     final title = _titleController.text.trim();
@@ -794,12 +682,12 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
           Container(
             width: double.infinity,
             margin: const EdgeInsets.only(bottom: 18),
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+            padding: const EdgeInsets.only(bottom: 16),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.82),
+              color: Colors.transparent,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: theme.colorScheme.primary.withValues(alpha: 0.08),
+                color: Colors.transparent,
               ),
             ),
             child: SelectableText(
@@ -811,12 +699,12 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
           ),
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
+          padding: EdgeInsets.zero,
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.82),
+            color: Colors.transparent,
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: theme.colorScheme.primary.withValues(alpha: 0.08),
+              color: Colors.transparent,
             ),
           ),
           child: MarkdownBody(
@@ -825,21 +713,19 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
             softLineBreak: true,
             onTapLink: (text, href, title) => _openMarkdownLink(href),
             sizedImageBuilder: (config) {
-              final uri = config.uri;
-              if (uri.scheme == 'file') {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(18),
-                    child: Image.file(File(uri.toFilePath())),
-                  ),
-                );
-              }
+              final uri = config.uri.toString();
+              final allUris =
+                  _insertedImages.map((image) => image.uri).toList();
+              final index = allUris.indexOf(uri);
               return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
-                  child: Image.network(uri.toString()),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: GestureDetector(
+                  onTap: () => showNoteImageViewer(context,
+                      index < 0 ? [uri] : allUris, index < 0 ? 0 : index),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: NoteImage(uri: uri),
+                  ),
                 ),
               );
             },
@@ -883,91 +769,64 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
 
   Widget _buildEditBody() {
     final theme = Theme.of(context);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return ListView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 40),
       children: [
         TextField(
           controller: _titleController,
+          maxLines: null,
+          textInputAction: TextInputAction.next,
           decoration: InputDecoration(
-            hintText: '标题',
-            border: InputBorder.none,
+            hintText: '标题（可选）',
             suffixIcon: _titleController.text.isEmpty
                 ? null
                 : IconButton(
-                    icon: const Icon(Icons.close_rounded),
                     tooltip: '清空标题',
                     onPressed: _titleController.clear,
+                    icon: const Icon(Icons.close_rounded,
+                        size: 18, color: Color(0xFFB5BEB7)),
                   ),
+            filled: false,
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            contentPadding: EdgeInsets.zero,
+            hintStyle: const TextStyle(
+                fontSize: 26,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFFADB6AE)),
           ),
-          style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+          style: const TextStyle(
+              fontSize: 26, height: 1.4, fontWeight: FontWeight.w600),
         ),
-        const SizedBox(height: 10),
-        _buildEditorToolbar(theme),
-        _buildInsertedImagesSection(theme),
         const SizedBox(height: 12),
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.82),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: theme.colorScheme.primary.withValues(alpha: 0.08),
-              ),
-            ),
-            child: Column(
-              children: [
-                SizedBox(
-                  height: 34,
-                  child: Row(
-                    children: [
-                      Text(
-                        '正文',
-                        style: theme.textTheme.labelLarge?.copyWith(
-                          color: theme.colorScheme.primary,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        onPressed: _pasteClipboardIntoContent,
-                        icon: const Icon(Icons.content_paste_rounded, size: 18),
-                        visualDensity: VisualDensity.compact,
-                        tooltip: '粘贴剪贴板',
-                      ),
-                      IconButton(
-                        onPressed: _contentController.text.isEmpty
-                            ? null
-                            : _clearContent,
-                        icon: const Icon(Icons.close_rounded, size: 19),
-                        visualDensity: VisualDensity.compact,
-                        tooltip: '清空正文',
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _contentController,
-                    decoration: const InputDecoration(
-                      hintText: '开始记录您的想法...',
-                      border: InputBorder.none,
-                      filled: false,
-                      contentPadding: EdgeInsets.only(top: 4),
-                    ),
-                    style: TextStyle(fontSize: _contentFontSize, height: 1.7),
-                    maxLines: null,
-                    expands: true,
-                    textAlignVertical: TextAlignVertical.top,
-                    keyboardType: TextInputType.multiline,
-                    textCapitalization: TextCapitalization.sentences,
-                  ),
-                ),
-              ],
-            ),
+        Text(
+            '${DateFormat('M月d日 HH:mm').format(_currentNote.createdAt)}  ·  ${_contentController.text.runes.length} 字',
+            style: theme.textTheme.bodySmall),
+        const SizedBox(height: 20),
+        TextField(
+          controller: _contentController,
+          decoration: const InputDecoration(
+            hintText: '在这里，留住一个想法…',
+            filled: false,
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            contentPadding: EdgeInsets.zero,
           ),
+          style: TextStyle(fontSize: _contentFontSize, height: 1.8),
+          minLines: _insertedImages.isEmpty ? 12 : 4,
+          maxLines: null,
+          keyboardType: TextInputType.multiline,
+          textCapitalization: TextCapitalization.sentences,
         ),
+        if (_insertedImages.isNotEmpty) ...[
+          const SizedBox(height: 24),
+          const Divider(height: 1),
+          const SizedBox(height: 12),
+          _buildInsertedImagesSection(theme),
+        ],
       ],
     );
   }
@@ -975,72 +834,64 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
     if (!_isInitialized) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-
     final isEditMode = _currentMode == NoteDetailMode.editRaw;
-
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
-        if (didPop) return;
-        await _handleBack();
+        if (!didPop) await _handleBack();
       },
       child: Scaffold(
-        backgroundColor: theme.scaffoldBackgroundColor,
+        backgroundColor: Colors.white,
         appBar: AppBar(
+          backgroundColor: Colors.white,
           leading: IconButton(
-            icon: const Icon(
-              Icons.arrow_back_ios_new_rounded,
-              color: Colors.white,
-            ),
+            icon: const Icon(Icons.arrow_back_rounded),
+            tooltip: '返回笔记',
             onPressed: _handleBack,
           ),
-          title: Text(isEditMode ? '编辑笔记' : '阅读笔记'),
+          title: Text(isEditMode ? '写笔记' : '笔记'),
           actions: [
+            if (isEditMode)
+              IconButton(
+                onPressed: _pasteClipboardIntoContent,
+                tooltip: '粘贴剪贴板',
+                icon: const Icon(Icons.content_paste_outlined),
+              ),
             Padding(
-              padding: const EdgeInsets.only(right: 2),
-              child: IconButton(
-                onPressed: isEditMode
-                    ? (_isSaving ? null : _saveNote)
-                    : _switchToEditMode,
-                tooltip: isEditMode ? '完成' : '编辑',
-                padding: const EdgeInsets.only(left: 8, right: 6),
-                constraints: const BoxConstraints.tightFor(
-                  width: 52,
-                  height: 52,
+              padding: const EdgeInsets.only(right: 16),
+              child: TextButton(
+                onPressed: _isSaving
+                    ? null
+                    : (isEditMode ? _saveNote : _switchToEditMode),
+                style: TextButton.styleFrom(
+                  textStyle: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600),
+                  minimumSize: const Size(56, 40),
                 ),
-                icon: isEditMode
-                    ? (_isSaving
-                        ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(
-                            Icons.check_rounded,
-                            size: 28,
-                            color: Colors.white,
-                          ))
-                    : const Icon(
-                        Icons.edit_outlined,
-                        size: 26,
-                        color: Colors.white,
-                      ),
+                child: _isSaving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : Text(isEditMode ? '保存' : '编辑'),
               ),
             ),
           ],
         ),
-        body: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 22),
-          child: _currentMode == NoteDetailMode.viewMarkdown
-              ? SingleChildScrollView(child: _buildPreviewBody(theme))
-              : _buildEditBody(),
+        body: SafeArea(
+          child: Column(children: [
+            Expanded(
+                child: isEditMode
+                    ? _buildEditBody()
+                    : SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(24, 12, 24, 40),
+                        child: _buildPreviewBody(theme),
+                      )),
+            if (isEditMode) _buildEditorToolbar(theme),
+          ]),
         ),
       ),
     );

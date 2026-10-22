@@ -1,16 +1,50 @@
-# lunarix_notes
+# 翼亭笔记
 
-Effortlessly capture your thoughts and ideas on the go.
+Flutter Android 本地笔记应用。笔记使用 SQLite 保存，图片和附件保存在应用私有文件目录，编辑草稿使用 SharedPreferences 保存。
 
-## Getting Started
+## 编译
 
-This project is a starting point for a Flutter application.
+```bash
+make release-apk
+```
 
-A few resources to get you started if this is your first Flutter project:
+正式包：`build/app/outputs/flutter-apk/app-release.apk`。使用现有 `android/key.properties` 和 keystore 签名；不要替换或提交签名密钥。Makefile 和 Gradle 已配置 JBR 17。历史环境说明见 [构建记录](docs/release-build-log-2026-05-10.md)。
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+每次交付更新前，递增 `pubspec.yaml` 的版本号与构建号，确保构建号高于手机已安装版本。安装前核对最终 APK 元数据，安装后核对设备的 `versionName` 与 `versionCode`。设置页从实际安装包读取版本，不维护独立的固定字符串。
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+flutter analyze --no-pub
+flutter test --no-pub
+```
+
+## 文本分享
+
+在其他 Android 应用的系统分享菜单中选择“翼亭笔记”，即可接收 `ACTION_SEND` / `text/plain`，将完整文字或链接保存为独立笔记并打开编辑页。有分享主题时使用主题作为标题，否则从正文首行生成标题。
+
+支持冷启动和运行中接收。待接收内容使用独立的 Android SharedPreferences 队列暂存，写入笔记后才确认消费；通过已有 `source_filename` 字段识别同一次投递，避免确认失败后的重复写入。不覆盖原有新笔记草稿，不需要修改数据库结构。
+
+localshare 的纯文本卡片可以通过该入口分享过来；带图片、附件的卡片使用文件分享，本次未接入此类分享。
+
+## 编辑与图片
+
+- 标题可选，正文与图片在同一个页面中竖向滚动，底部提供格式、撤销、图片和附件工具。
+- 单张图片大图展示，多张图片使用网格；点击可全屏预览、双指缩放、左右翻页。
+- 长按图片拖到另一张图片上可排序；图片菜单支持移到第一张和确认移除，撤销可恢复移除的图片。
+- 当前图片排序作用于图片区域，尚不支持拖入正文段落之间或白板式自由布局。
+- 新建笔记返回时提示“保存这篇笔记？”，提供横排的“不保存”和“保存笔记”；编辑已有笔记时提供“放弃修改”和“保存退出”。关闭面板继续编辑，草稿在编辑时自动保存。删除新笔记草稿需确认。
+
+## 列表操作
+
+“新建”位于筛选栏右侧，不使用悬浮按钮。左滑显示完整的置顶/取消置顶与删除操作；笔记卡片不再显示手动排序把手，已有置顶顺序仍保留。编辑标题旁提供清空按钮，支持撤销。
+
+## 界面与图标
+
+设置中的排序将排序依据与排列方向分开选择，选择后即时保存；主题色、字号滑块、菜单与确认面板使用统一样式。
+
+新版图标源文件位于 `assets/icon/yiting_notes_icon_v2.png`，生成方式与完整提示词见 [图标说明](assets/icon/ICON_PROMPT.md)。旧图标源文件保留。
+
+## 数据保护
+
+升级安装前先保存当前编辑并保留可恢复的备份。使用相同包名 `com.lix.lunarix_notes` 和原签名，通过 `adb install -r` 覆盖安装。不要为解决签名不匹配而卸载应用或清除数据。
+
+完整备份需要同时保留数据库、图片/附件目录及草稿偏好文件；仓库中的历史备份不能代表手机上的最新数据。设置中的数据库恢复会替换当前笔记，仅有数据库文件也不包含图片和附件文件。

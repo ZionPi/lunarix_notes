@@ -3,6 +3,8 @@ import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/models/note.dart';
+import '../../../core/widgets/pin_mark.dart';
+import '../../../core/widgets/star_mark.dart';
 import '../../note_detail/views/note_detail_screen.dart';
 
 class NoteCard extends StatelessWidget {
@@ -12,8 +14,6 @@ class NoteCard extends StatelessWidget {
   final VoidCallback onToggleStar;
   final VoidCallback onCopyContent;
   final Function(Note) onNoteUpdated;
-  final bool showDragHandle;
-  final int? dragIndex;
 
   const NoteCard({
     super.key,
@@ -23,12 +23,15 @@ class NoteCard extends StatelessWidget {
     required this.onToggleStar,
     required this.onCopyContent,
     required this.onNoteUpdated,
-    this.showDragHandle = false,
-    this.dragIndex,
   });
 
-  String _formatDisplayDate(DateTime dt) {
-    return DateFormat('yyyy-MM-dd HH:mm:ss').format(dt);
+  String _formatDisplayDate(DateTime date) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    if (!date.isBefore(today)) return '今天 ${DateFormat('HH:mm').format(date)}';
+    if (!date.isBefore(today.subtract(const Duration(days: 1)))) return '昨天';
+    return DateFormat(date.year == now.year ? 'M月d日' : 'yyyy年M月d日')
+        .format(date);
   }
 
   String _stripMarkdown(String input) {
@@ -47,7 +50,7 @@ class NoteCard extends StatelessWidget {
         .trim();
   }
 
-  String _buildPreviewText({int length = 40, bool useTitleFallback = true}) {
+  String _buildPreviewText({int length = 180, bool useTitleFallback = true}) {
     final content = _stripMarkdown(note.content);
     if (content.isNotEmpty) {
       if (content.length <= length) {
@@ -73,270 +76,207 @@ class NoteCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cardTheme = Theme.of(context).cardTheme;
-    final cardBackgroundColor = cardTheme.color ?? Colors.white;
-    final cardBrightness = ThemeData.estimateBrightnessForColor(
-      cardBackgroundColor,
-    );
-    final textColorOnCard =
-        cardBrightness == Brightness.dark ? Colors.white : Colors.black87;
-    final accentColor = Theme.of(context).colorScheme.primary;
-    final mutedTextColor = textColorOnCard.withValues(alpha: 0.66);
-    final chipBackground = cardBrightness == Brightness.dark
-        ? Colors.white.withValues(alpha: 0.14)
-        : Colors.black.withValues(alpha: 0.05);
-    final chipBorder = cardBrightness == Brightness.dark
-        ? Colors.white.withValues(alpha: 0.16)
-        : Colors.black.withValues(alpha: 0.06);
-    final isWhiteCard = cardBackgroundColor.computeLuminance() > 0.96;
-    final polishedCardColor = cardBrightness == Brightness.dark || isWhiteCard
-        ? cardBackgroundColor
-        : Color.alphaBlend(
-            cardBackgroundColor.withValues(alpha: 0.88),
-            Colors.white,
-          );
-    final cardBorderColor = cardBrightness == Brightness.dark
-        ? Colors.white.withValues(alpha: 0.10)
-        : Colors.black.withValues(alpha: 0.05);
-
-    final displayTitle =
-        _isDefaultTimestampTitle(note.title) ? '' : note.title.trim();
-    final previewText = _buildPreviewText(
-      useTitleFallback: displayTitle.isEmpty,
-    );
-    final hasImages = RegExp(r'!\[[^\]]*\]\([^)]+\)').hasMatch(note.content);
-    DateTime timeToDisplay;
-    const updateThresholdSeconds = 10;
-
-    if (note.updatedAt.difference(note.createdAt).inSeconds.abs() <
-        updateThresholdSeconds) {
-      timeToDisplay = note.createdAt;
-    } else {
-      timeToDisplay = note.updatedAt;
-    }
-
-    final formattedTime = _formatDisplayDate(timeToDisplay);
-    return Slidable(
-      key: ValueKey(note.id),
-      startActionPane: ActionPane(
-        motion: const ScrollMotion(),
-        extentRatio: 0.25,
-        children: [
-          SlidableAction(
-            onPressed: (context) => onDelete(),
-            backgroundColor: Colors.red,
-            foregroundColor: Colors.white,
-            icon: Icons.delete_outline,
-            label: '删除',
-          ),
-        ],
-      ),
-      endActionPane: ActionPane(
-        motion: const DrawerMotion(),
-        extentRatio: 0.52,
-        children: [
-          SlidableAction(
-            onPressed: (context) => onTogglePin(),
-            backgroundColor:
-                note.isPinned == 1 ? accentColor : const Color(0xFF7B8DBA),
-            foregroundColor: Colors.white,
-            icon: note.isPinned == 1 ? Icons.push_pin : Icons.push_pin_outlined,
-            label: '置顶',
-          ),
-          SlidableAction(
-            onPressed: (context) => onToggleStar(),
-            backgroundColor: note.isStarred == 1
-                ? const Color(0xFFF2A93B)
-                : const Color(0xFFD4A33A),
-            foregroundColor: Colors.white,
-            icon: note.isStarred == 1
-                ? Icons.star_rounded
-                : Icons.star_border_rounded,
-            label: '收藏',
-          ),
-        ],
-      ),
-      child: Card(
-        color: polishedCardColor,
-        clipBehavior: Clip.antiAlias,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-          side: BorderSide(color: cardBorderColor),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () async {
-            final result = await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => NoteDetailScreen(note: note),
+    final theme = Theme.of(context);
+    final title = _isDefaultTimestampTitle(note.title) ? '' : note.title.trim();
+    final preview = _buildPreviewText(useTitleFallback: false);
+    final imageCount =
+        RegExp(r'!\[[^\]]*\]\([^)]+\)').allMatches(note.content).length;
+    return Padding(
+      padding: theme.cardTheme.margin ??
+          const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+      child: LayoutBuilder(builder: (context, constraints) {
+        final textScale = MediaQuery.textScalerOf(context).scale(12) / 12;
+        final actionWidth = 76 + (textScale - 1).clamp(0, 1) * 48;
+        final paneRatio =
+            ((actionWidth * 2 + 8) / constraints.maxWidth).clamp(0.1, 0.9);
+        return ClipRect(
+            child: Slidable(
+          key: ValueKey(note.id),
+          groupTag: 'notes',
+          endActionPane: ActionPane(
+            motion: const BehindMotion(),
+            extentRatio: paneRatio,
+            children: [
+              _SwipeAction(
+                key: const ValueKey('swipe-pin'),
+                onPressed: onTogglePin,
+                color: const Color(0xFF966A20),
+                background: const Color(0xFFFCF5E3),
+                icon: PinMark(size: 24, filled: note.isPinned == 1),
+                label: note.isPinned == 1 ? '取消置顶' : '置顶',
               ),
-            );
-            if (result == true) {
-              onNoteUpdated(note);
-            }
-          },
-          onLongPress: onCopyContent,
-          child: SizedBox(
-            height: 128,
-            child: Row(
-              children: [
-                Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      16,
-                      13,
-                      showDragHandle ? 6 : 14,
-                      12,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            if (displayTitle.isNotEmpty) ...[
-                              Expanded(
-                                child: Text(
-                                  displayTitle,
-                                  style: TextStyle(
-                                    fontSize: 17,
-                                    height: 1.18,
-                                    fontWeight: FontWeight.w800,
-                                    color: textColorOnCard,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                            ],
-                            if (displayTitle.isEmpty) const Spacer(),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: chipBackground,
-                                border: Border.all(color: chipBorder),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(
-                                formattedTime,
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w700,
-                                  color: mutedTextColor,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: displayTitle.isEmpty ? 12 : 18),
+              _SwipeAction(
+                key: const ValueKey('swipe-delete'),
+                onPressed: onDelete,
+                color: const Color(0xFFA44C43),
+                background: const Color(0xFFF8EDE9),
+                icon: const Icon(Icons.delete_outline_rounded,
+                    color: Color(0xFFA44C43), size: 22),
+                label: '删除',
+              ),
+            ],
+          ),
+          child: Card(
+            margin: EdgeInsets.zero,
+            child: InkWell(
+              onTap: () async {
+                final result = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => NoteDetailScreen(note: note)));
+                if (result == true) onNoteUpdated(note);
+              },
+              onLongPress: onCopyContent,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 16, 10, 14),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        if (note.isPinned == 1) ...[
+                          const PinMark(),
+                          const SizedBox(width: 6),
+                        ],
                         Expanded(
-                          child: previewText.isEmpty
-                              ? const SizedBox.shrink()
-                              : Text(
-                                  previewText,
-                                  style: TextStyle(
-                                    fontSize: displayTitle.isEmpty ? 17 : 14,
-                                    height: displayTitle.isEmpty ? 1.46 : 1.42,
-                                    fontWeight: displayTitle.isEmpty
-                                        ? FontWeight.w600
-                                        : FontWeight.w500,
-                                    color: displayTitle.isEmpty
-                                        ? textColorOnCard
-                                        : textColorOnCard.withValues(
-                                            alpha: 0.78),
-                                  ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                        ),
+                            child: Text(_formatDisplayDate(note.updatedAt),
+                                style: theme.textTheme.bodySmall)),
+                        if (note.isStarred == 1) const StarMark(),
                         SizedBox(
-                          height: 18,
-                          child: Row(
-                            children: [
-                              if (hasImages) ...[
-                                _StatusMark(
-                                  icon: Icons.image_outlined,
-                                  color: mutedTextColor,
-                                ),
-                                const SizedBox(width: 6),
+                            height: 32,
+                            width: 36,
+                            child: PopupMenuButton<String>(
+                              tooltip: '笔记操作',
+                              padding: EdgeInsets.zero,
+                              icon: const Icon(Icons.more_horiz_rounded,
+                                  size: 21),
+                              onSelected: (action) {
+                                switch (action) {
+                                  case 'pin':
+                                    onTogglePin();
+                                  case 'star':
+                                    onToggleStar();
+                                  case 'copy':
+                                    onCopyContent();
+                                  case 'delete':
+                                    onDelete();
+                                }
+                              },
+                              itemBuilder: (_) => [
+                                PopupMenuItem(
+                                    value: 'pin',
+                                    child: Text(
+                                        note.isPinned == 1 ? '取消置顶' : '置顶笔记')),
+                                PopupMenuItem(
+                                    value: 'star',
+                                    child: Text(
+                                        note.isStarred == 1 ? '取消收藏' : '收藏笔记')),
+                                const PopupMenuItem(
+                                    value: 'copy', child: Text('复制正文')),
+                                const PopupMenuItem(
+                                    value: 'delete', child: Text('删除笔记')),
                               ],
-                              const Spacer(),
-                              if (note.isPinned == 1) ...[
-                                _StatusMark(
-                                  icon: Icons.push_pin,
-                                  color: accentColor,
-                                ),
-                                const SizedBox(width: 6),
-                              ],
-                              if (note.isStarred == 1)
-                                _StatusMark(
-                                  icon: Icons.star_rounded,
-                                  color: Colors.amber[700]!,
-                                ),
-                            ],
-                          ),
-                        ),
+                            )),
+                      ]),
+                      if (title.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Text(title,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.titleMedium
+                                    ?.copyWith(fontSize: 18, height: 1.45))),
                       ],
-                    ),
-                  ),
-                ),
-                if (showDragHandle)
-                  ReorderableDragStartListener(
-                    index: dragIndex ?? 0,
-                    child: Container(
-                      width: 54,
-                      height: double.infinity,
-                      color: Colors.transparent,
-                      alignment: Alignment.center,
-                      child: Container(
-                        width: 34,
-                        height: 58,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.22),
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(
-                            color: Colors.black.withValues(alpha: 0.06),
-                          ),
-                        ),
-                        child: Icon(
-                          Icons.drag_indicator_rounded,
-                          size: 26,
-                          color: textColorOnCard.withValues(alpha: 0.44),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+                      if (preview.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Text(preview,
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: title.isEmpty
+                                        ? null
+                                        : const Color(0xFF6B7970),
+                                    fontSize: title.isEmpty ? 17 : 14,
+                                    height: 1.6))),
+                      ],
+                      if (imageCount > 0) ...[
+                        const SizedBox(height: 12),
+                        Row(children: [
+                          const Icon(Icons.image_outlined, size: 15),
+                          const SizedBox(width: 6),
+                          Text('$imageCount 张图片',
+                              style: theme.textTheme.bodySmall),
+                        ]),
+                      ],
+                      if (title.isEmpty && preview.isEmpty && imageCount == 0)
+                        const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: Text('空白笔记')),
+                    ]),
+              ),
             ),
           ),
-        ),
-      ),
+        ));
+      }),
     );
   }
 }
 
-class _StatusMark extends StatelessWidget {
-  final IconData icon;
+class _SwipeAction extends StatelessWidget {
+  final String label;
+  final Widget icon;
   final Color color;
+  final Color background;
+  final VoidCallback onPressed;
 
-  const _StatusMark({required this.icon, required this.color});
+  const _SwipeAction(
+      {super.key,
+      required this.label,
+      required this.icon,
+      required this.color,
+      required this.background,
+      required this.onPressed});
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 18,
-      height: 18,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Icon(icon, size: 11, color: color),
-    );
-  }
+  Widget build(BuildContext context) => Expanded(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Center(
+              child: SizedBox(
+            width: double.infinity,
+            height: 88,
+            child: Material(
+              color: background,
+              borderRadius: BorderRadius.circular(16),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: () {
+                  Slidable.of(context)?.close();
+                  onPressed();
+                },
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+                  child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        icon,
+                        const SizedBox(height: 8),
+                        Text(label,
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            style: TextStyle(
+                                fontSize: 12,
+                                height: 1.25,
+                                fontWeight: FontWeight.w500,
+                                color: color)),
+                      ]),
+                ),
+              ),
+            ),
+          )),
+        ),
+      );
 }

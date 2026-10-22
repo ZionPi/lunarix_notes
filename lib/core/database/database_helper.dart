@@ -127,6 +127,22 @@ CREATE TABLE notes (
   }
 
   // 根据ID读取单个笔记
+  // Incoming shares may be retried after process death or a failed acknowledgement.
+  // Use the existing source field to avoid inserting the same delivery twice.
+  Future<Note> createSharedNote(Note note) async {
+    final db = await instance.database;
+    return db.transaction((txn) async {
+      final existing = await txn.query('notes',
+          where: 'source_filename = ?',
+          whereArgs: [note.sourceFilename],
+          limit: 1);
+      if (existing.isNotEmpty) return Note.fromMap(existing.first);
+      final id = await txn.insert('notes', note.toMap());
+      return note.copyWith(id: id);
+    });
+  }
+
+  // 根据ID读取单个笔记
   Future<Note?> getNoteById(int id) async {
     final db = await instance.database;
     final maps = await db.query(

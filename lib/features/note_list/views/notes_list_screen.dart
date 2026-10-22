@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 
 import '../../../core/database/database_helper.dart';
 import '../../../core/models/note.dart';
 import '../../../core/services/draft_service.dart';
 import '../../../core/services/settings_service.dart';
+import '../../../core/services/shared_text_service.dart';
+import '../../../core/widgets/confirm_action_sheet.dart';
 import '../../note_detail/views/note_detail_screen.dart';
 import '../../settings/views/settings_screen.dart';
 import '../widgets/note_card.dart';
@@ -21,17 +24,54 @@ class _NotesListScreenState extends State<NotesListScreen> {
   NoteDraft? _newNoteDraft;
   bool _isLoading = true;
   String _searchTerm = '';
+  String _filter = 'all';
   String _currentSortOrder = 'updated_at DESC';
   final TextEditingController _searchController = TextEditingController();
 
   final DatabaseHelper _dbHelper = DatabaseHelper.instance;
   final DraftService _draftService = DraftService();
   final SettingsService _settingsService = SettingsService();
+  final SharedTextService _sharedTextService = SharedTextService();
+  bool _processingShares = false;
 
   @override
   void initState() {
     super.initState();
     _loadSettingsAndRefreshUI();
+    _sharedTextService.listen(_receiveSharedNotes);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _receiveSharedNotes());
+  }
+
+  Future<void> _receiveSharedNotes() async {
+    if (_processingShares || !mounted) return;
+    _processingShares = true;
+    try {
+      while (mounted) {
+        final shared = await _sharedTextService.peek();
+        if (shared == null || !mounted) break;
+        // Persist as a separate note before opening the editor. Existing drafts
+        // keep their own keys and are never replaced by incoming shares.
+        final note = await _dbHelper.createSharedNote(shared.toNote());
+        await _sharedTextService.acknowledge();
+        if (!mounted) break;
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => NoteDetailScreen(note: note, startEditing: true),
+        ));
+        await _refreshNotes(showLoading: false);
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('接收分享失败，分享内容仍待接收：$error'),
+          action: SnackBarAction(
+            label: '重试',
+            onPressed: _receiveSharedNotes,
+          ),
+        ));
+      }
+    } finally {
+      _processingShares = false;
+    }
   }
 
   Future<void> _loadSettingsAndRefreshUI() async {
@@ -46,6 +86,7 @@ class _NotesListScreenState extends State<NotesListScreen> {
 
   @override
   void dispose() {
+    _sharedTextService.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -140,6 +181,12 @@ class _NotesListScreenState extends State<NotesListScreen> {
   }
 
   Future<void> _discardNewNoteDraft() async {
+    final confirmed = await confirmActionSheet(context,
+        title: '删除这份草稿？',
+        message: '删除后无法恢复，已保存的笔记不受影响。',
+        confirmLabel: '删除草稿',
+        destructive: true);
+    if (confirmed != true) return;
     await _draftService.clearDraft(null);
     if (!mounted) return;
     setState(() {
@@ -331,46 +378,6 @@ class _NotesListScreenState extends State<NotesListScreen> {
     _refreshNotes(showLoading: false);
   }
 
-  Future<void> _handleReorderNotes(int oldIndex, int newIndex) async {
-    if (oldIndex < 0 || oldIndex >= _notes.length) return;
-    final movedNote = _notes[oldIndex];
-    if (movedNote.isPinned != 1) return;
-
-    final pinnedCount = _notes.where((note) => note.isPinned == 1).length;
-    var targetIndex = newIndex;
-    if (targetIndex >= pinnedCount) targetIndex = pinnedCount - 1;
-    if (targetIndex < 0) targetIndex = 0;
-    if (targetIndex == oldIndex) return;
-
-    final previousNotes = List<Note>.from(_notes);
-    final pinnedNotes =
-        _notes.where((note) => note.isPinned == 1).toList(growable: true);
-    final unpinnedNotes = _notes.where((note) => note.isPinned != 1).toList();
-
-    final item = pinnedNotes.removeAt(oldIndex);
-    pinnedNotes.insert(targetIndex, item);
-    final reorderedPinned = [
-      for (var i = 0; i < pinnedNotes.length; i++)
-        pinnedNotes[i].copyWith(pinOrder: i),
-    ];
-
-    setState(() {
-      _notes = [...reorderedPinned, ...unpinnedNotes];
-    });
-
-    try {
-      await _dbHelper.updatePinnedOrder(reorderedPinned);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _notes = previousNotes;
-      });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('置顶排序保存失败: $e')));
-    }
-  }
-
   Future<void> _navigateToSettings() async {
     await Navigator.push(
       context,
@@ -462,7 +469,11 @@ class _NotesListScreenState extends State<NotesListScreen> {
           ),
           child: Text(
             _searchTerm.isEmpty
-                ? '还没有笔记。\n点击右上角的 + 新建一篇，或去设置页导入备份。'
+                ? (_filter == 'starred'
+                    ? '收藏值得回看的内容\n在笔记菜单中点“收藏”即可收纳。'
+                    : _filter == 'images'
+                        ? '还没有带图片的笔记\n写笔记时，轻点图片按钮添加。'
+                        : '留住此刻的想法\n轻点上方“新建”，开始第一篇记录。')
                 : '未找到与 "$_searchTerm" 匹配的笔记。\n试试换一个关键词。',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -476,13 +487,20 @@ class _NotesListScreenState extends State<NotesListScreen> {
   }
 
   Widget _buildNotesList() {
-    return ReorderableListView.builder(
-      buildDefaultDragHandles: false,
-      onReorderItem: _handleReorderNotes,
-      padding: const EdgeInsets.fromLTRB(4, 8, 4, 16),
-      itemCount: _notes.length,
+    final visible = _notes
+        .where((note) => switch (_filter) {
+              'starred' => note.isStarred == 1,
+              'images' => note.content.contains('!['),
+              _ => true,
+            })
+        .toList();
+    if (visible.isEmpty) return _buildEmptyState(context);
+    return SlidableAutoCloseBehavior(
+        child: ListView.builder(
+      padding: const EdgeInsets.only(top: 8, bottom: 24),
+      itemCount: visible.length,
       itemBuilder: (context, index) {
-        final note = _notes[index];
+        final note = visible[index];
         final card = NoteCard(
           key: ValueKey(note.id),
           note: note,
@@ -491,12 +509,10 @@ class _NotesListScreenState extends State<NotesListScreen> {
           onToggleStar: () => _handleToggleStar(note),
           onCopyContent: () => _handleCopyNoteContent(note),
           onNoteUpdated: _onNoteCardUpdated,
-          showDragHandle: note.isPinned == 1,
-          dragIndex: note.isPinned == 1 ? index : null,
         );
         return card;
       },
-    );
+    ));
   }
 
   Widget _buildContent(BuildContext context) {
@@ -516,48 +532,98 @@ class _NotesListScreenState extends State<NotesListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.settings_outlined),
-          tooltip: '设置',
-          onPressed: _navigateToSettings,
-        ),
-        title: const Text('翼亭笔记'),
-        centerTitle: true,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(64),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: '搜索标题或正文',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchTerm.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.close_rounded),
-                        tooltip: '清除搜索',
-                        onPressed: _clearSearch,
-                      ),
-              ),
-              onChanged: _onSearchChanged,
-            ),
-          ),
-        ),
-        actions: <Widget>[
+        toolbarHeight: 76,
+        title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('翼亭笔记', style: theme.textTheme.headlineSmall),
+          Text(_isLoading ? '正在加载…' : '${_notes.length} 篇笔记',
+              style: theme.textTheme.bodySmall),
+        ]),
+        actions: [
           IconButton(
-            icon: const Icon(Icons.add_circle_outline),
-            tooltip: '新建笔记',
-            onPressed: () => _navigateToDetailScreen(),
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: '设置',
+            onPressed: _navigateToSettings,
           ),
+          const SizedBox(width: 12)
         ],
       ),
-      body: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 180),
-        child: _buildContent(context),
-      ),
+      body: SafeArea(
+          child: Center(
+              child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 820),
+        child: Column(children: [
+          Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+              child: TextField(
+                controller: _searchController,
+                decoration: InputDecoration(
+                  hintText: '搜索笔记',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _searchTerm.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.close_rounded),
+                          tooltip: '清除搜索',
+                          onPressed: _clearSearch,
+                        ),
+                ),
+                onChanged: _onSearchChanged,
+              )),
+          Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Row(children: [
+                Expanded(
+                    child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(children: [
+                          for (final entry in {
+                            'all': '全部',
+                            'starred': '收藏',
+                            'images': '图片'
+                          }.entries)
+                            Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ChoiceChip(
+                                  label: Text(entry.value),
+                                  selected: _filter == entry.key,
+                                  showCheckmark: false,
+                                  side: BorderSide.none,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                  onSelected: (_) =>
+                                      setState(() => _filter = entry.key),
+                                )),
+                        ]))),
+                const SizedBox(width: 8),
+                ActionChip(
+                  key: const ValueKey('create-note'),
+                  onPressed: () => _navigateToDetailScreen(),
+                  tooltip: '新建笔记',
+                  avatar: Icon(Icons.add_rounded,
+                      size: 18, color: theme.colorScheme.primary),
+                  label: const Text('新建'),
+                  labelStyle: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: theme.colorScheme.primary),
+                  backgroundColor:
+                      theme.colorScheme.primary.withValues(alpha: 0.06),
+                  side: BorderSide(
+                      color: theme.colorScheme.primary.withValues(alpha: 0.12)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  pressElevation: 0,
+                ),
+              ])),
+          const SizedBox(height: 4),
+          Expanded(child: _buildContent(context)),
+        ]),
+      ))),
     );
   }
 }

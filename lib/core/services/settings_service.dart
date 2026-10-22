@@ -15,25 +15,21 @@ class SettingsService {
 
   static const Map<String, Map<String, Color>> themePresets = {
     'default': {
-      // 你当前的默认颜色
-      'appBarColor': Color(0xFF42519B),
-      'cardBackgroundColor': Color(0xFFC8E374),
+      'appBarColor': Color(0xFF32695D),
+      'cardBackgroundColor': Color(0xFFF4F7F2)
     },
     'preset1': {
-      // 翼亭红与绿
-      'appBarColor': Color(0xFFC60000),
-      'cardBackgroundColor': Color(0xFF00A07B),
+      'appBarColor': Color(0xFF9A5E57),
+      'cardBackgroundColor': Color(0xFFFAF3F0)
     },
     'preset2': {
-      // 深蓝与青草绿
-      'appBarColor': Color(0xFF0F1732),
-      'cardBackgroundColor': Color(0xFF7CCE51),
+      'appBarColor': Color(0xFF456581),
+      'cardBackgroundColor': Color(0xFFF1F5F9)
     },
     'preset3': {
-      // 宝石蓝与活力橙
-      'appBarColor': Color(0xFF2F3491),
-      'cardBackgroundColor': Color(0xFFFFB343),
-    }
+      'appBarColor': Color(0xFF816641),
+      'cardBackgroundColor': Color(0xFFF8F4EB)
+    },
   };
 
   Future<SharedPreferences> _getPrefs() async {
@@ -125,6 +121,11 @@ class SettingsService {
     if (colorValue == null) {
       String presetName = await getSelectedThemePresetName();
       return themePresets[presetName]?['appBarColor'] ??
+          themePresets['default']!['appBarColor']!;
+    }
+    if ({0xFF42519B, 0xFFC60000, 0xFF0F1732, 0xFF2F3491}.contains(colorValue)) {
+      final preset = await getSelectedThemePresetName();
+      return themePresets[preset]?['appBarColor'] ??
           themePresets['default']!['appBarColor']!;
     }
     return Color(colorValue);

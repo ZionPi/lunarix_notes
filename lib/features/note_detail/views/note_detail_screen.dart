@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:intl/intl.dart';
@@ -15,10 +18,13 @@ import '../../../core/models/note.dart';
 import '../../../core/services/draft_service.dart';
 import '../../../core/services/settings_service.dart';
 import '../widgets/note_image_gallery.dart';
+import '../widgets/note_image_rotation.dart';
 
 enum NoteDetailMode { viewMarkdown, editRaw }
 
 enum _LeaveAction { save, discard }
+
+enum _NoteAction { edit, share }
 
 class NoteDetailScreen extends StatefulWidget {
   final Note? note;
@@ -41,6 +47,8 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
 
   bool _isNewNote = false;
   bool _isSaving = false;
+  bool _isSharing = false;
+  final _shareBoundaryKey = GlobalKey();
   bool _isInitialized = false;
   bool _didPersistChanges = false;
   bool _newNoteDefaultTitleActive = false;
@@ -249,6 +257,11 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     if (splitIndex <= 2) return null;
     final alt = trimmed.substring(2, splitIndex).trim();
     var href = trimmed.substring(splitIndex + 2, trimmed.length - 1).trim();
+    final rotation =
+        RegExp(r'^<(.+)> "lunarix-turn=([1-3])"$').firstMatch(href);
+    if (rotation != null) {
+      href = rotateNoteImage(rotation.group(1)!, int.parse(rotation.group(2)!));
+    }
     if (href.startsWith('<') && href.endsWith('>') && href.length > 2) {
       href = href.substring(1, href.length - 1);
     }
@@ -663,11 +676,93 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     );
   }
 
+  void _rotateInsertedImage(int index, int delta) {
+    if (!mounted || index < 0 || index >= _insertedImages.length) return;
+    final image = _insertedImages[index];
+    _recordHistoryNow();
+    _insertedImages[index] = _EditableImage(
+      alt: image.alt,
+      uri: rotateNoteImage(image.uri, delta),
+    );
+    _markStructuredDraftChanged();
+  }
+
+  Future<void> _shareNote() async {
+    if (_isSharing) return;
+    setState(() => _isSharing = true);
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      final previewContext = _shareBoundaryKey.currentContext;
+      if (previewContext == null || !previewContext.mounted || !mounted) return;
+
+      // Wait for every image in the full document, including below the fold.
+      final loads = <Future<void>>[];
+      void visit(Element element) {
+        if (element.widget case Image(:final image)) {
+          loads.add(precacheImage(image, element, onError: (error, stack) {
+            // The reading view already shows a placeholder for missing images.
+          }));
+        }
+        element.visitChildren(visit);
+      }
+
+      previewContext.visitChildElements(visit);
+      await Future.wait(loads).timeout(const Duration(seconds: 15));
+      if (!mounted) return;
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || !previewContext.mounted) return;
+      final boundary =
+          previewContext.findRenderObject()! as RenderRepaintBoundary;
+      final size = boundary.size;
+      const maxHeight = 8192.0;
+      if (size.height > maxHeight) {
+        _showShareMessage('笔记太长，无法生成一张长图。');
+        return;
+      }
+      final ratio =
+          math.min(2.0, math.min(maxHeight / size.height, 1200 / size.width));
+      if (ratio < 0.5) {
+        _showShareMessage('笔记太宽，无法生成清晰的长图。');
+        return;
+      }
+      final image = await boundary.toImage(pixelRatio: ratio);
+      try {
+        final data = await image.toByteData(format: ui.ImageByteFormat.png);
+        if (data == null) throw StateError('PNG encoding failed');
+        if (!mounted) return;
+        final cache = await getTemporaryDirectory();
+        final exports = await Directory(p.join(cache.path, 'note_exports'))
+            .create(recursive: true);
+        final name = 'note-${DateTime.now().microsecondsSinceEpoch}.png';
+        await File(p.join(exports.path, name)).writeAsBytes(
+          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        );
+        if (!mounted) return;
+        await const MethodChannel('com.lix.lunarix_notes/share_image')
+            .invokeMethod<void>('share', name);
+      } finally {
+        image.dispose();
+      }
+    } on TimeoutException {
+      if (mounted) _showShareMessage('图片加载超时，请重试。');
+    } catch (_) {
+      if (mounted) _showShareMessage('无法分享笔记，请重试。');
+    } finally {
+      if (mounted) setState(() => _isSharing = false);
+    }
+  }
+
+  void _showShareMessage(String message) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Widget _buildInsertedImagesSection(ThemeData theme) => NoteImageGallery(
         uris: _insertedImages.map((image) => image.uri).toList(),
         onRemove: _removeInsertedImage,
         onReorder: _moveInsertedImage,
         onAdd: _insertImage,
+        onRotate: _rotateInsertedImage,
       );
 
   Widget _buildPreviewBody(ThemeData theme) {
@@ -713,7 +808,13 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
             softLineBreak: true,
             onTapLink: (text, href, title) => _openMarkdownLink(href),
             sizedImageBuilder: (config) {
-              final uri = config.uri.toString();
+              final turns = RegExp(r'^lunarix-turn=([1-3])$')
+                  .firstMatch(config.title ?? '')
+                  ?.group(1);
+              final source = config.uri.toString();
+              final uri = turns == null
+                  ? source
+                  : rotateNoteImage(source, int.parse(turns));
               final allUris =
                   _insertedImages.map((image) => image.uri).toList();
               final index = allUris.indexOf(uri);
@@ -860,25 +961,56 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
                 tooltip: '粘贴剪贴板',
                 icon: const Icon(Icons.content_paste_outlined),
               ),
-            Padding(
-              padding: const EdgeInsets.only(right: 16),
-              child: TextButton(
-                onPressed: _isSaving
-                    ? null
-                    : (isEditMode ? _saveNote : _switchToEditMode),
-                style: TextButton.styleFrom(
-                  textStyle: const TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.w600),
-                  minimumSize: const Size(56, 40),
+            if (isEditMode)
+              Padding(
+                padding: const EdgeInsets.only(right: 16),
+                child: TextButton(
+                  onPressed: _isSaving ? null : _saveNote,
+                  child: _isSaving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Text('保存'),
                 ),
-                child: _isSaving
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : Text(isEditMode ? '保存' : '编辑'),
+              )
+            else if (_isSharing)
+              const Center(
+                  child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 18),
+                child: SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, semanticsLabel: '正在生成长图')),
+              ))
+            else
+              PopupMenuButton<_NoteAction>(
+                tooltip: '笔记操作',
+                onSelected: (action) {
+                  switch (action) {
+                    case _NoteAction.edit:
+                      _switchToEditMode();
+                    case _NoteAction.share:
+                      _shareNote();
+                  }
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                      value: _NoteAction.edit,
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.edit_outlined),
+                        title: Text('编辑'),
+                      )),
+                  PopupMenuItem(
+                      value: _NoteAction.share,
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.share_outlined),
+                        title: Text('分享'),
+                      )),
+                ],
               ),
-            ),
           ],
         ),
         body: SafeArea(
@@ -887,8 +1019,17 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
                 child: isEditMode
                     ? _buildEditBody()
                     : SingleChildScrollView(
-                        padding: const EdgeInsets.fromLTRB(24, 12, 24, 40),
-                        child: _buildPreviewBody(theme),
+                        child: RepaintBoundary(
+                          key: _shareBoundaryKey,
+                          child: ColoredBox(
+                            color: Colors.white,
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.fromLTRB(24, 12, 24, 40),
+                              child: _buildPreviewBody(theme),
+                            ),
+                          ),
+                        ),
                       )),
             if (isEditMode) _buildEditorToolbar(theme),
           ]),
@@ -937,7 +1078,12 @@ class _EditableImage {
 
   const _EditableImage({required this.alt, required this.uri});
 
-  String get markdown => '![${alt.replaceAll(']', '')}](<${_safeUri(uri)}>)';
+  String get markdown {
+    final turns = noteImageTurns(uri);
+    final source = _safeUri(noteImageSource(uri));
+    final rotation = turns == 0 ? '' : ' "lunarix-turn=$turns"';
+    return '![${alt.replaceAll(']', '')}](<$source>$rotation)';
+  }
 
   String _safeUri(String value) {
     return value

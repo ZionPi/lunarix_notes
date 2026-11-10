@@ -1,14 +1,17 @@
 package com.lix.lunarix_notes
 
+import android.content.ClipData
 import android.content.Intent
 import android.os.Bundle
 import android.os.Build
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import java.io.File
 
 class MainActivity: FlutterActivity() {
     private var shareChannel: MethodChannel? = null
@@ -32,6 +35,33 @@ class MainActivity: FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger,
+            "com.lix.lunarix_notes/share_image").setMethodCallHandler { call, result ->
+            if (call.method != "share") {
+                result.notImplemented()
+            } else {
+                val name = call.arguments as? String
+                if (name == null || !Regex("""note-\d+\.png""").matches(name)) {
+                    result.error("invalid_file", "Invalid export filename", null)
+                } else {
+                    try {
+                        val file = File(cacheDir, "note_exports/$name")
+                        require(file.isFile)
+                        val uri = FileProvider.getUriForFile(this, "$packageName.note_exports", file)
+                        val share = Intent(Intent.ACTION_SEND).apply {
+                            type = "image/png"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            clipData = ClipData.newUri(contentResolver, "笔记", uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivity(Intent.createChooser(share, null))
+                        result.success(null)
+                    } catch (error: Exception) {
+                        result.error("share_failed", "Could not share the exported note", null)
+                    }
+                }
+            }
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger,
             "com.lix.lunarix_notes/app_info").setMethodCallHandler { call, result ->
             if (call.method == "getVersion") {
@@ -92,3 +122,5 @@ class MainActivity: FlutterActivity() {
             .putString("pending", items.toString()).commit()
     }
 }
+
+class NoteExportProvider : FileProvider()

@@ -3,13 +3,15 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../../core/widgets/confirm_action_sheet.dart';
+import 'note_image_rotation.dart';
 
-/// Image management only changes Markdown order, never the underlying files.
+/// Image management changes Markdown references, never the underlying files.
 class NoteImageGallery extends StatelessWidget {
   final List<String> uris;
   final ValueChanged<int> onRemove;
   final void Function(int from, int to) onReorder;
   final VoidCallback onAdd;
+  final void Function(int index, int delta)? onRotate;
 
   const NoteImageGallery({
     super.key,
@@ -17,6 +19,7 @@ class NoteImageGallery extends StatelessWidget {
     required this.onRemove,
     required this.onReorder,
     required this.onAdd,
+    this.onRotate,
   });
 
   @override
@@ -90,8 +93,9 @@ class NoteImageGallery extends StatelessWidget {
                               color: const Color(0xFFEBEEE8),
                               child: InkWell(
                                 key: ValueKey('preview-image-$i'),
-                                onTap: () =>
-                                    showNoteImageViewer(context, uris, i),
+                                onTap: () => showNoteImageViewer(
+                                    context, uris, i,
+                                    onRotate: onRotate),
                                 child: NoteImage(
                                     uri: uris[i], fit: BoxFit.contain),
                               ),
@@ -115,6 +119,12 @@ class NoteImageGallery extends StatelessWidget {
                                     foregroundColor: const Color(0xFF44564B),
                                   ),
                                   itemBuilder: (_) => [
+                                    if (onRotate != null) ...[
+                                      const PopupMenuItem(
+                                          value: 'left', child: Text('向左旋转')),
+                                      const PopupMenuItem(
+                                          value: 'right', child: Text('向右旋转')),
+                                    ],
                                     if (i > 0)
                                       const PopupMenuItem(
                                           value: 'first', child: Text('移到第一张')),
@@ -122,6 +132,11 @@ class NoteImageGallery extends StatelessWidget {
                                         value: 'remove', child: Text('移除图片')),
                                   ],
                                   onSelected: (action) async {
+                                    if (action == 'left' || action == 'right') {
+                                      onRotate?.call(
+                                          i, action == 'left' ? -1 : 1);
+                                      return;
+                                    }
                                     if (action == 'first') {
                                       onReorder(i, 0);
                                       return;
@@ -171,7 +186,10 @@ class NoteImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final parsed = Uri.tryParse(uri);
+    final source = noteImageSource(uri);
+    final parsed = Uri.tryParse(source);
+    Widget rotated(Widget image) =>
+        RotatedBox(quarterTurns: noteImageTurns(uri), child: image);
     Widget broken(BuildContext _, Object error, StackTrace? trace) =>
         const Center(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -181,29 +199,38 @@ class NoteImage extends StatelessWidget {
                 style: TextStyle(color: Color(0xFF89958D), fontSize: 12)),
           ]),
         );
-    if (parsed?.scheme == 'file') {
-      return Image.file(File(parsed!.toFilePath()),
-          fit: fit, errorBuilder: broken);
+    if (parsed?.scheme == 'file' &&
+        (parsed!.host.isEmpty || parsed.host == 'localhost')) {
+      return rotated(Image.file(File(parsed.toFilePath()),
+          fit: fit, errorBuilder: broken));
     }
     if (parsed?.scheme == 'https' || parsed?.scheme == 'http') {
-      return Image.network(uri, fit: fit, errorBuilder: broken);
+      return rotated(Image.network(source, fit: fit, errorBuilder: broken));
     }
     return broken(
         context, const FormatException('Unsupported image URI'), null);
   }
 }
 
-void showNoteImageViewer(BuildContext context, List<String> uris, int index) {
+void showNoteImageViewer(
+  BuildContext context,
+  List<String> uris,
+  int index, {
+  void Function(int index, int delta)? onRotate,
+}) {
   Navigator.of(context).push(MaterialPageRoute<void>(
     fullscreenDialog: true,
-    builder: (_) => _ImageViewer(uris: List.of(uris), initialIndex: index),
+    builder: (_) => _ImageViewer(
+        uris: List.of(uris), initialIndex: index, onRotate: onRotate),
   ));
 }
 
 class _ImageViewer extends StatefulWidget {
   final List<String> uris;
   final int initialIndex;
-  const _ImageViewer({required this.uris, required this.initialIndex});
+  final void Function(int index, int delta)? onRotate;
+  const _ImageViewer(
+      {required this.uris, required this.initialIndex, this.onRotate});
 
   @override
   State<_ImageViewer> createState() => _ImageViewerState();
@@ -213,6 +240,12 @@ class _ImageViewerState extends State<_ImageViewer> {
   late final PageController _controller =
       PageController(initialPage: widget.initialIndex);
   late int _index = widget.initialIndex;
+
+  void _rotate(int delta) {
+    widget.onRotate?.call(_index, delta);
+    setState(() =>
+        widget.uris[_index] = rotateNoteImage(widget.uris[_index], delta));
+  }
 
   @override
   void dispose() {
@@ -234,6 +267,18 @@ class _ImageViewerState extends State<_ImageViewer> {
           title: Text('${_index + 1} / ${widget.uris.length}',
               style: const TextStyle(color: Colors.white, fontSize: 16)),
           centerTitle: true,
+          actions: [
+            if (widget.onRotate != null) ...[
+              IconButton(
+                  onPressed: () => _rotate(-1),
+                  tooltip: '向左旋转',
+                  icon: const Icon(Icons.rotate_left)),
+              IconButton(
+                  onPressed: () => _rotate(1),
+                  tooltip: '向右旋转',
+                  icon: const Icon(Icons.rotate_right)),
+            ],
+          ],
         ),
         body: SafeArea(
             child: Column(children: [
